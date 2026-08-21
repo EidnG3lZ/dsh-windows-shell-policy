@@ -12,7 +12,7 @@
  */
 import type { Context } from 'cordis';
 import z from 'schemastery';
-export declare const name = "@dsh-external/dsh-windows-shell-policy";
+export declare const name = "dsh-windows-shell-policy";
 export declare const inject: string[];
 export interface Config {
     /** 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。 */

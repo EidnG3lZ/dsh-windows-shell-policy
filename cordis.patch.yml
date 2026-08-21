@@ -2,4 +2,4 @@
 # Install with: dsh plugin --profile web add github:LAN-TINA-WS/dsh-windows-shell-policy
 - insert:
     - id: dsh-windows-shell-policy
-      name: '@dsh-external/dsh-windows-shell-policy'
+      name: 'dsh-windows-shell-policy'

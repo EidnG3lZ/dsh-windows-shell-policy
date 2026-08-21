@@ -4,8 +4,8 @@
 
 ![Default Shell config card](docs/screenshots/shell-policy-card.png)
 
-[![npm version](https://img.shields.io/npm/v/@dsh-external/dsh-windows-shell-policy)](https://www.npmjs.com/package/@dsh-external/dsh-windows-shell-policy)
-[![npm downloads](https://img.shields.io/npm/dw/@dsh-external/dsh-windows-shell-policy)](https://www.npmjs.com/package/@dsh-external/dsh-windows-shell-policy)
+[![npm version](https://img.shields.io/npm/v/dsh-windows-shell-policy)](https://www.npmjs.com/package/dsh-windows-shell-policy)
+[![npm downloads](https://img.shields.io/npm/dw/dsh-windows-shell-policy)](https://www.npmjs.com/package/dsh-windows-shell-policy)
 [![GitHub release](https://img.shields.io/github/v/release/LAN-TINA-WS/dsh-windows-shell-policy)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/releases/latest)
 [![GitHub downloads](https://img.shields.io/github/downloads/LAN-TINA-WS/dsh-windows-shell-policy/total)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/releases)
 [![GitHub stars](https://img.shields.io/github/stars/LAN-TINA-WS/dsh-windows-shell-policy)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy)
@@ -43,7 +43,7 @@ dsh plugin --profile web add github:LAN-TINA-WS/dsh-windows-shell-policy
 **npm install (one command)**:
 
 ```sh
-dsh plugin --profile web add @dsh-external/dsh-windows-shell-policy
+dsh plugin --profile web add dsh-windows-shell-policy
 ```
 
 **Release ZIP install**:

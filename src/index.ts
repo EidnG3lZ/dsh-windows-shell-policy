@@ -18,7 +18,7 @@ import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const name = '@dsh-external/dsh-windows-shell-policy'
+export const name = 'dsh-windows-shell-policy'
 export const inject = ['tools', 'subprocess', 'systemPrompt', 'webServer']
 
 /** 本插件拥有的 settings namespace（与官方 shell namespace 区分）。 */
