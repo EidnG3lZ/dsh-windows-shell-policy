@@ -305,6 +305,8 @@ export function apply(ctx: ClientContext): void {
     ctx.slots.register({
       name: 'settings.plugin.item',
       id: 'shell-policy',
+      // rc.7 起该 slot 为 kind:'keyed'，注册必须带 key（list 下多余字段被忽略，向后兼容）
+      key: 'shell-policy',
       order: 5,
       label: () => '默认 Shell',
     } as any, ShellPolicyCard as any),
