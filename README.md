@@ -1,4 +1,8 @@
-# dsh-windows-shell-policy — 组合插件（发布轨）
+# dsh-windows-shell-policy — Windows 默认 Shell 策略插件
+
+中文 | [English](README.en.md)
+
+![默认 Shell 配置卡片](docs/screenshots/shell-policy-card.png)
 
 [![npm version](https://img.shields.io/npm/v/@dsh-external/dsh-windows-shell-policy)](https://www.npmjs.com/package/@dsh-external/dsh-windows-shell-policy)
 [![npm downloads](https://img.shields.io/npm/dw/@dsh-external/dsh-windows-shell-policy)](https://www.npmjs.com/package/@dsh-external/dsh-windows-shell-policy)
@@ -7,41 +11,89 @@
 [![GitHub stars](https://img.shields.io/github/stars/LAN-TINA-WS/dsh-windows-shell-policy)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy)
 [![license](https://img.shields.io/github/license/LAN-TINA-WS/dsh-windows-shell-policy)](LICENSE)
 
-Windows 默认 Shell 策略组合插件（hybrid 形态）：探测 git-bash/MSYS2/Cygwin，在「设置 → 插件 → 插件配置」提供「默认 Shell」折叠卡片切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面。解决 Windows 上 DSH 默认走 PowerShell、agent 执行 POSIX 命令错误率高的问题（LLM 训练语料中 bash 占比远高于 PowerShell）。
+## dsh-windows-shell-policy
 
-## 功能
+DeepSeek Harness 的 **Windows 默认 Shell 策略插件**：DSH 在 Windows 上默认启用 PowerShell（pwsh），而 LLM 训练语料中 bash 占比远高于 PowerShell，agent 执行 POSIX 命令时错误率显著升高。本插件探测 git-bash/MSYS2/Cygwin，在「设置 → 插件 → 插件配置」提供「默认 Shell」折叠卡片一键切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面，让 agent 只面对一个 shell 工具。
 
-- **bash 探测**：显式 `bashPath` → Git 常见安装路径（Program Files / x86）→ MSYS2 / Cygwin → PATH，找到即用
-- **配置面板**：设置 → 插件 → 插件配置「默认 Shell」折叠卡片（与官方「终端 / Agent 循环 / 网页搜索」卡片同构），显示探测状态与当前生效 shell，自动 / bash / pwsh 三选一（staged 编辑 + 保存/放弃，折叠时保留未保存标记）
-- **策略生效**：`auto` 时探测到 bash 则用 bash 否则 pwsh；显式 `bash` / `pwsh` 强制对应 shell；切换下一次请求生效
-- **bash 工具**：effective=bash 时动态注册（git-bash 执行，subprocess 通道，超时 / 输出截断 / exit code 标记），终端卡片展示（对话页可点击查看命令、cwd、输出与 exit 状态，与官方 shell 工具一致）
-- **提示词裁剪**：`system-prompt/assemble` 中按策略隐藏 pwsh / bash，agent 工具面只保留一个 shell 工具
-- **持久化**：`preferred` 写入 settings 文档 `shell-policy` section，重启保留
-- **卸载即净**：`dev_uninject_plugin` 一键还原（工具注销 + 提示词恢复 + junction 清理）
+> [最新 Release](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/releases/latest) · [dsh-plugin 生态](https://github.com/topics/dsh-plugin) · [反馈](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/issues/1)
 
-## 构建与安装
+## 成品展示
+
+![bash 终端卡片](docs/screenshots/bash-terminal-card.png)
+
+| 能力 | 说明 |
+| --- | --- |
+| bash 探测 | 显式 `bashPath` → Git 常见安装路径（Program Files / x86）→ MSYS2 / Cygwin → PATH，找到即用 |
+| 配置面板 | 「默认 Shell」折叠卡片（与官方「终端 / Agent 循环 / 网页搜索」卡片同构），显示探测状态与当前生效 shell，自动 / bash / pwsh 三选一（staged 编辑 + 保存/放弃，折叠时保留未保存标记） |
+| 策略生效 | `auto` 时探测到 bash 则用 bash 否则 pwsh；显式 `bash` / `pwsh` 强制对应 shell；切换下一次请求生效 |
+| bash 工具 | effective=bash 时动态注册（git-bash 执行，subprocess 通道，超时 / 输出截断 / exit code 标记），终端卡片展示（对话页可点击查看命令、cwd、输出与 exit 状态，与官方 shell 工具一致） |
+| 提示词裁剪 | `system-prompt/assemble` 中按策略隐藏 pwsh / bash，agent 工具面只保留一个 shell 工具 |
+| 持久化 | `preferred` 写入 settings 文档 `shell-policy` section，重启保留 |
+| 卸载即净 | `dsh plugin --profile web remove` 或 `dev_uninject_plugin` 一键还原（工具注销 + 提示词恢复 + junction 清理） |
+
+## 快速安装
+
+**GitHub 直装（推荐，国内网络最快，免等 npm）**：
 
 ```sh
-# 构建（需 DSH_CHECKOUT 指向 dsh 源码 checkout）
-DSH_CHECKOUT=<checkout> bash scripts/build.sh   # 产出 lib/index.js + lib/client.js + tgz
-# 注入器环境内（免重启，host+UI 即时生效）
-dev_inject_plugin <本目录>
-# 或安装进 web profile（重启生效，双路径持久化）
-node <harness>\apps\cli\lib\bin.js plugin --profile web add link:<repo>
+dsh plugin --profile web add github:LAN-TINA-WS/dsh-windows-shell-policy
+# 重启 dsh web，打开「设置 → 插件 → 插件配置」开始配置
 ```
 
-## 架构说明
+**npm 安装（一条命令）**：
 
-- **host 侧**（`src/index.ts`）：bash 探测 + settings section 注册（`installSettingsSection`）+ bash 工具动态注册（`ctx.tools.register` 返回 disposer，切换时注销）+ `system-prompt/assemble` 工具面裁剪 + webServer API（`/dsh-shell-policy/api/status`、`/preferred`）
-- **client 侧**（`src/client/index.ts`）：`settings.plugin.item` slot 折叠卡片（React，tsdown 编译为 `lib/client.js`）
-- **为什么卡片不走 settingsScope**：settings 的 client 端 RPC 有 apiproxy allowlist（`WEB_SETTINGS_NAMESPACES`），插件自行注册的 namespace 不会被 serve（官方注释明确这是 deferred work）。因此卡片读写走本插件自己的 host API，host 端仍经 settings 服务持久化
+```sh
+dsh plugin --profile web add @dsh-external/dsh-windows-shell-policy
+```
 
-## 台账
+**Release ZIP 安装**：
 
-- **v0.0.1（当前）**：组合插件首版。bash 探测 + 配置面板折叠卡片 + 动态工具注册 + 提示词裁剪 + 终端卡片展示。实测：注入即生效（host+UI）、配置切换下一次请求生效、git-bash 执行链路正常（echo / 管道 / ls）、折叠卡片与官方同构、卸载即净。
+1. 从 [Releases](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/releases/latest) 下载 `dsh-windows-shell-policy-v*.zip` 并解压
+2. `dsh plugin --profile web add link:<解压目录>`
+3. 重启 `dsh web`，打开「设置 → 插件 → 插件配置」开始配置
 
-## 规划（待办）
+**注入器安装（免重启，开发环境）**：
 
-- **P1 run_in_background 支持**：bash 工具后台执行（jobs 通道），与官方 tool-bash 对齐
-- **P2 bashPath 面板配置**：卡片内显示 / 编辑显式 bash 路径（当前仅 settings.yaml 手动配置）
-- **P3 非 Windows 平台适配**：Linux / macOS 上自动跳过（当前仅 Windows 语义）
+```sh
+DSH_CHECKOUT=<checkout> bash scripts/build.sh   # 产出 lib/index.js + lib/client.js
+dev_inject_plugin <本目录>                      # host+UI 即时生效
+```
+
+## 配置指南
+
+「设置 → 插件 → 插件配置」内展开「默认 Shell」卡片：
+
+| 选项 | 行为 |
+| --- | --- |
+| 自动 | 探测到 git-bash 则用 bash，否则回落 pwsh（开箱即用） |
+| bash | 强制 git-bash（未探测到 bash 时回落 pwsh 并提示） |
+| pwsh | 强制 PowerShell（维持 DSH 默认行为） |
+
+切换保存后下一次请求生效；`preferred` 持久化于 settings 文档 `shell-policy` section，重启保留。显式 bash 路径可通过 settings.yaml 的 `shell-policy.bashPath` 配置（面板编辑在规划中）。
+
+## 反馈
+
+问题、需求、使用体验：提交到 [issue #1（欢迎反馈）](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/issues/1)。
+
+## 贡献者
+
+| 贡献者 | 贡献 |
+| --- | --- |
+| [LAN-TINA-WS](https://github.com/LAN-TINA-WS) | 项目作者与维护者 |
+
+## License
+
+本项目采用 [MIT License](LICENSE)。
+
+## 开发者文档
+
+开发工艺（编写规范、DSH 能力清单、组合插件转正流程）见 [docs/](docs/)：
+
+| 文档 | 内容 |
+| --- | --- |
+| [conventions.md](docs/conventions.md) | 插件编写规范与常见失败速查 |
+| [capabilities-host.md](docs/capabilities-host.md) | DSH Host 服务/事件清单（本插件用到的） |
+| [capabilities-client.md](docs/capabilities-client.md) | DSH Client 槽位/服务清单（本插件用到的） |
+| [roadmap-composition.md](docs/roadmap-composition.md) | 组合插件转正施工记录 |
+
+仓库结构：`src/`（host + client 源码）、`scripts/`（构建）、`docs/`（文档与截图）、`cordis.patch.yml`（bundle patch 装配）。

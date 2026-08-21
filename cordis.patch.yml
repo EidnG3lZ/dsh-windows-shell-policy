@@ -1,0 +1,5 @@
+# dsh-windows-shell-policy bundle patch: inserts its row into the web plugin roster.
+# Install with: dsh plugin --profile web add github:LAN-TINA-WS/dsh-windows-shell-policy
+- insert:
+    - id: dsh-windows-shell-policy
+      name: '@dsh-external/dsh-windows-shell-policy'

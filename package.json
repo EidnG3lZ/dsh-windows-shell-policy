@@ -1,15 +1,34 @@
 {
   "name": "@dsh-external/dsh-windows-shell-policy",
   "version": "0.0.1",
-  "description": "Windows 默认 Shell 策略：探测 git-bash/MSYS2，配置面板切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面",
-  "private": true,
+  "description": "DSH Windows default shell policy plugin: probe git-bash/MSYS2, switch bash/pwsh from the plugin config card, register the bash tool and trim the prompt tool surface. DSH Windows 默认 Shell 策略插件：探测 git-bash，配置面板切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "cordis.patch.yml",
+    "LICENSE"
   ],
   "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "shell",
+    "bash",
+    "git-bash",
+    "windows",
+    "pwsh"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LAN-TINA-WS/dsh-windows-shell-policy.git"
+  },
+  "homepage": "https://github.com/LAN-TINA-WS/dsh-windows-shell-policy#readme",
+  "bugs": {
+    "url": "https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/issues"
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh-llm": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
@@ -26,7 +45,8 @@
   },
   "scripts": {
     "build": "bash scripts/build.sh",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "exports": {
     ".": {
@@ -40,6 +60,9 @@
     "./package.json": "./package.json"
   },
   "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
     "client": {
       "inject": [
         "@deepseek-ai/dsh-client-runtime",

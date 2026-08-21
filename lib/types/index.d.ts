@@ -1,0 +1,44 @@
+/**
+ * dsh-windows-shell-policy — Windows 默认 Shell 策略组合插件（host 侧）。
+ *
+ * 职责：
+ * 1. 探测 git-bash / MSYS2 / Cygwin 可执行文件（显式 bashPath → 常见安装路径 → PATH）。
+ * 2. 通过 settings namespace `shell-policy` 暴露 preferred（auto/bash/pwsh）配置，
+ *    在「设置 - 插件 - 插件配置」面板由 client 卡片编辑。
+ * 3. 策略生效：effective=bash 时动态注册 `bash` 工具（git-bash 执行），
+ *    并在 system-prompt/assemble 中裁剪掉 `pwsh` 工具；effective=pwsh 时注销
+ *    bash 工具并裁剪掉 `bash`（官方 tool-pwsh 继续工作）。
+ * 4. 提供 /dsh-shell-policy/api/status 供 client 卡片显示探测状态。
+ */
+import type { Context } from 'cordis';
+import z from 'schemastery';
+export declare const name = "@dsh-external/dsh-windows-shell-policy";
+export declare const inject: string[];
+export interface Config {
+    /** 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。 */
+    preferred: 'auto' | 'bash' | 'pwsh';
+    /** 显式 bash 可执行文件路径；留空则自动探测。 */
+    bashPath: string;
+}
+export declare const Config: z<Schemastery.ObjectS<{
+    preferred: z<"auto" | "bash" | "pwsh", "auto" | "bash" | "pwsh">;
+    bashPath: z<string, string>;
+}>, Schemastery.ObjectT<{
+    preferred: z<"auto" | "bash" | "pwsh", "auto" | "bash" | "pwsh">;
+    bashPath: z<string, string>;
+}>>;
+/** 本插件消费的 host 服务面（webServer 类型由本包声明）。 */
+type AppContext = Context & {
+    webServer: {
+        register(spec: {
+            kind: 'prefix';
+            path: string;
+            handler: (req: unknown, res: {
+                writeHead(code: number, headers: Record<string, string>): void;
+                end(body: string): void;
+            }) => void | Promise<void>;
+        }): () => void;
+    };
+};
+export declare function apply(ctx: AppContext, config: Config): void;
+export {};
