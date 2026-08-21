@@ -43,7 +43,11 @@ interface Status {
 
 const cardStyle: Record<string, string> = {
   listStyle: 'none',
-  border: '1px solid var(--dsw-alias-border-l2)',
+  // border 简写在 React inline style 下拆解会丢失（border-color 回落 currentColor 黑色），
+  // 必须用长写属性（官方卡片走 CSS class 无此问题）。
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2)',
   borderRadius: '12px',
   background: 'var(--dsw-alias-bg-layer-3)',
   transition: 'border-color .16s, background .16s',
@@ -57,7 +61,7 @@ const cardOpenStyle: Record<string, string> = {
 const headerStyle: Record<string, string> = {
   width: '100%',
   appearance: 'none',
-  border: '0',
+  borderWidth: '0',
   background: 'none',
   font: 'inherit',
   color: 'inherit',
@@ -131,7 +135,9 @@ const pendingStyle: Record<string, string> = {
 }
 
 const bodyStyle: Record<string, string> = {
-  borderTop: '1px solid var(--dsw-alias-border-l2)',
+  borderTopWidth: '1px',
+  borderTopStyle: 'solid',
+  borderTopColor: 'var(--dsw-alias-border-l2)',
   margin: '0 16px',
   paddingBottom: '8px',
 }
@@ -192,7 +198,9 @@ const fieldHintStyle: Record<string, string> = {
 
 const inputStyle: Record<string, string> = {
   appearance: 'none',
-  border: '1px solid var(--dsw-alias-border-l2)',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2)',
   borderRadius: '8px',
   padding: '6px 10px',
   font: 'inherit',
@@ -209,7 +217,9 @@ const footerStyle: Record<string, string> = {
   justifyContent: 'flex-end',
   gap: '8px',
   padding: '12px 0 4px',
-  borderTop: '1px solid var(--dsw-alias-border-l2)',
+  borderTopWidth: '1px',
+  borderTopStyle: 'solid',
+  borderTopColor: 'var(--dsw-alias-border-l2)',
 }
 
 const failedStyle: Record<string, string> = {
@@ -223,7 +233,9 @@ const failedStyle: Record<string, string> = {
 
 const buttonBase: Record<string, string> = {
   appearance: 'none',
-  border: '1px solid transparent',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'transparent',
   borderRadius: '8px',
   padding: '5px 14px',
   font: 'inherit',
