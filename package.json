@@ -1,6 +1,6 @@
 {
   "name": "dsh-windows-shell-policy",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "DSH Windows default shell policy plugin: probe git-bash/MSYS2, switch bash/pwsh from the plugin config card, register the bash tool and trim the prompt tool surface. DSH Windows 默认 Shell 策略插件：探测 git-bash，配置面板切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面",
   "type": "module",
   "main": "./lib/index.js",
