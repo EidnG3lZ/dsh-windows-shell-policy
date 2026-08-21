@@ -1,6 +1,6 @@
 {
   "name": "dsh-windows-shell-policy",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "DSH Windows default shell policy plugin: probe git-bash/MSYS2, switch bash/pwsh from the plugin config card, register the bash tool and trim the prompt tool surface. DSH Windows 默认 Shell 策略插件：探测 git-bash，配置面板切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面",
   "type": "module",
   "main": "./lib/index.js",
@@ -34,6 +34,9 @@
     "@deepseek-ai/dsh-tools": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-subprocess": ">=0.0.1-rc <2",
     "@deepseek-ai/dsh-settings": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-sandbox": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-sandbox-policy": ">=0.0.1-rc <2",
+    "@deepseek-ai/dsh-jobs": ">=0.0.1-rc <2",
     "cordis": ">=4.0.0-rc <5",
     "schemastery": "^3.18.0",
     "@deepseek-ai/dsh-client-ui-slots": ">=0.0.1-rc <2"
@@ -54,7 +57,6 @@
       "default": "./lib/index.js"
     },
     "./client": {
-      "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
     "./package.json": "./package.json"

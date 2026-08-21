@@ -3,15 +3,23 @@
  *
  * 职责：
  * 1. 探测 git-bash / MSYS2 / Cygwin 可执行文件（显式 bashPath → 常见安装路径 → PATH）。
- * 2. 通过 settings namespace `shell-policy` 暴露 preferred（auto/bash/pwsh）配置，
- *    在「设置 - 插件 - 插件配置」面板由 client 卡片编辑。
+ * 2. 通过 settings namespace `shell-policy` 暴露 preferred（auto/bash/pwsh）与
+ *    bashPath 配置，在「设置 - 插件 - 插件配置」面板由 client 卡片编辑。
  * 3. 策略生效：effective=bash 时动态注册 `bash` 工具（git-bash 执行），
  *    并在 system-prompt/assemble 中裁剪掉 `pwsh` 工具；effective=pwsh 时注销
  *    bash 工具并裁剪掉 `bash`（官方 tool-pwsh 继续工作）。
- * 4. 提供 /dsh-shell-policy/api/status 供 client 卡片显示探测状态。
+ * 4. bash 工具对齐官方 shell 工具：session cwd 解析、文件沙箱（confine +
+ *    sandbox_permissions 升级）、run_in_background（jobs 通道）、终端卡片展示。
+ * 5. 提供 /dsh-shell-policy/api 供 client 卡片读写状态与配置。
+ * 6. 非 Windows 平台直接跳过（DSH 默认 bash 工具已可用），仅保留状态 API。
  */
 import type { Context } from 'cordis';
 import z from 'schemastery';
+declare module '@deepseek-ai/dsh-jobs' {
+    interface JobKindMap {
+        bash: 'bash';
+    }
+}
 export declare const name = "dsh-windows-shell-policy";
 export declare const inject: string[];
 export interface Config {
@@ -21,10 +29,10 @@ export interface Config {
     bashPath: string;
 }
 export declare const Config: z<Schemastery.ObjectS<{
-    preferred: z<"auto" | "bash" | "pwsh", "auto" | "bash" | "pwsh">;
+    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh">;
     bashPath: z<string, string>;
 }>, Schemastery.ObjectT<{
-    preferred: z<"auto" | "bash" | "pwsh", "auto" | "bash" | "pwsh">;
+    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh">;
     bashPath: z<string, string>;
 }>>;
 /** 本插件消费的 host 服务面（webServer 类型由本包声明）。 */
@@ -33,7 +41,7 @@ type AppContext = Context & {
         register(spec: {
             kind: 'prefix';
             path: string;
-            handler: (req: unknown, res: {
+            handler: (req: any, res: {
                 writeHead(code: number, headers: Record<string, string>): void;
                 end(body: string): void;
             }) => void | Promise<void>;

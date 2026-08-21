@@ -3,20 +3,34 @@
  *
  * 职责：
  * 1. 探测 git-bash / MSYS2 / Cygwin 可执行文件（显式 bashPath → 常见安装路径 → PATH）。
- * 2. 通过 settings namespace `shell-policy` 暴露 preferred（auto/bash/pwsh）配置，
- *    在「设置 - 插件 - 插件配置」面板由 client 卡片编辑。
+ * 2. 通过 settings namespace `shell-policy` 暴露 preferred（auto/bash/pwsh）与
+ *    bashPath 配置，在「设置 - 插件 - 插件配置」面板由 client 卡片编辑。
  * 3. 策略生效：effective=bash 时动态注册 `bash` 工具（git-bash 执行），
  *    并在 system-prompt/assemble 中裁剪掉 `pwsh` 工具；effective=pwsh 时注销
  *    bash 工具并裁剪掉 `bash`（官方 tool-pwsh 继续工作）。
- * 4. 提供 /dsh-shell-policy/api/status 供 client 卡片显示探测状态。
+ * 4. bash 工具对齐官方 shell 工具：session cwd 解析、文件沙箱（confine +
+ *    sandbox_permissions 升级）、run_in_background（jobs 通道）、终端卡片展示。
+ * 5. 提供 /dsh-shell-policy/api 供 client 卡片读写状态与配置。
+ * 6. 非 Windows 平台直接跳过（DSH 默认 bash 工具已可用），仅保留状态 API。
  */
 import type { Context } from 'cordis'
 import z from 'schemastery'
-import { defineTool } from '@deepseek-ai/dsh-tools'
+import { defineTool, TOOL_ABORTED } from '@deepseek-ai/dsh-tools'
+import { HarnessError } from '@deepseek-ai/dsh-llm'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
+import type { ConfinedArgv, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, approveEscalation, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
+import type { JobOutcome } from '@deepseek-ai/dsh-jobs'
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
+
+declare module '@deepseek-ai/dsh-jobs' {
+  interface JobKindMap {
+    bash: 'bash'
+  }
+}
 
 export const name = 'dsh-windows-shell-policy'
 export const inject = ['tools', 'subprocess', 'systemPrompt', 'webServer']
@@ -85,10 +99,11 @@ interface BashResult {
   aborted: boolean
   stdout: { text: string; truncated: boolean }
   stderr: { text: string; truncated: boolean }
+  sandbox?: { mode: string; denied: boolean }
 }
 
 /** 渲染 bash 工具结果文本（对齐官方 shell 工具：exit 标记在末尾，exit 0 不报）。 */
-function renderBashResult(value: BashResult): string {
+function renderBashResult(value: BashResult, escalationModes: readonly SandboxMode[]): string {
   let body = value.stdout.text
   if (value.stderr.text.length > 0) {
     if (body.length > 0 && !body.endsWith('\n')) body += '\n'
@@ -96,6 +111,10 @@ function renderBashResult(value: BashResult): string {
   }
   if (body.length === 0) body = '(no output)'
   const markers: string[] = []
+  if (value.sandbox?.denied) {
+    markers.push(sandboxDenialMarker(value.sandbox.mode as SandboxMode))
+    if (escalationModes.length > 0) markers.push('[sandbox: escalation available — retry this exact command once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]')
+  }
   if (value.timedOut) markers.push('[timed out]')
   if (value.aborted) markers.push('[aborted]')
   else if (value.exitCode !== null && value.exitCode !== 0) markers.push(`[exit code: ${value.exitCode}]`)
@@ -122,6 +141,9 @@ interface BashToolArgs {
   description: string
   timeoutMs?: number
   workdir?: string
+  run_in_background?: boolean
+  sandbox_permissions?: string
+  justification?: string
 }
 
 /** 本插件消费的 host 服务面（webServer 类型由本包声明）。 */
@@ -130,17 +152,19 @@ type AppContext = Context & {
     register(spec: {
       kind: 'prefix'
       path: string
-      handler: (req: unknown, res: { writeHead(code: number, headers: Record<string, string>): void; end(body: string): void }) => void | Promise<void>
+      handler: (req: any, res: { writeHead(code: number, headers: Record<string, string>): void; end(body: string): void }) => void | Promise<void>
     }): () => void
   }
 }
 
 export function apply(ctx: AppContext, config: Config): void {
+  const isWindows = process.platform === 'win32'
   const entry = config as ResolvedConfig
   let source: () => ResolvedConfig = () => entry
   let probe: BashProbe = probeBash(entry.bashPath)
   let effective: 'bash' | 'pwsh' = 'pwsh'
   let bashDisposer: (() => void) | undefined
+  let registerError: string | undefined
 
   /** 按当前配置重新应用策略：探测 bash、切换工具注册。幂等。 */
   const applyPolicy = (): void => {
@@ -151,13 +175,18 @@ export function apply(ctx: AppContext, config: Config): void {
     if (next === effective && (next !== 'bash' || bashDisposer !== undefined)) return
     effective = next
     if (effective === 'bash') {
+      // 沙箱升级面是 composition 级事实（sandbox + sandboxPolicy 服务存在与否）。
+      const escalationModes: readonly SandboxMode[] =
+        ctx.get('sandbox') !== undefined && ctx.get('sandboxPolicy') !== undefined ? ESCALATION_TARGETS : []
       try {
         bashDisposer = ctx.tools.register(defineTool({
           name: 'bash',
           description: 'Execute a bash command (git-bash on Windows) and return its stdout/stderr. '
             + 'Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — '
             + 'pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. '
-            + 'Long output is truncated to its tail.',
+            + 'Long output is truncated to its tail. '
+            + 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; '
+            + 'read its output with `job_output` and stop it with `job_kill`.',
           parameters: {
             command: { type: 'string', required: true, description: 'The bash command to execute.' },
             description: {
@@ -168,37 +197,73 @@ export function apply(ctx: AppContext, config: Config): void {
                 + '"git status" → "Show working tree status".',
             },
             timeoutMs: { type: 'number', description: 'Timeout in milliseconds. Defaults to 120000; the command is killed on expiry.' },
-            workdir: { type: 'string', description: 'Working directory for this command. Defaults to the harness process cwd.' },
+            workdir: { type: 'string', description: 'Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.' },
+            run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.' },
+            sandbox_permissions: {
+              type: 'string' as const,
+              enum: [...ESCALATION_TARGETS],
+              description: 'The wider sandbox mode this command needs. Only valid as a one-shot retry of a command the sandbox just denied; requires justification and user approval.',
+            },
+            justification: {
+              type: 'string' as const,
+              description: 'Required with sandbox_permissions: one sentence for the user explaining why this exact command needs the wider access.',
+            },
           },
           output: {
             schema: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                exitCode: { required: true, oneOf: [{ type: 'integer' }, { type: 'null' }] },
-                timedOut: { type: 'boolean', required: true },
-                aborted: { type: 'boolean', required: true },
-                stdout: {
+              oneOf: [
+                {
                   type: 'object',
                   additionalProperties: false,
-                  required: true,
                   properties: {
-                    text: { type: 'string', required: true },
-                    truncated: { type: 'boolean', required: true },
+                    kind: { type: 'string', required: true, const: 'background' },
+                    jobId: { type: 'string', required: true },
                   },
                 },
-                stderr: {
+                {
                   type: 'object',
                   additionalProperties: false,
-                  required: true,
                   properties: {
-                    text: { type: 'string', required: true },
-                    truncated: { type: 'boolean', required: true },
+                    exitCode: { required: true, oneOf: [{ type: 'integer' }, { type: 'null' }] },
+                    timedOut: { type: 'boolean', required: true },
+                    aborted: { type: 'boolean', required: true },
+                    stdout: {
+                      type: 'object',
+                      additionalProperties: false,
+                      required: true,
+                      properties: {
+                        text: { type: 'string', required: true },
+                        truncated: { type: 'boolean', required: true },
+                      },
+                    },
+                    stderr: {
+                      type: 'object',
+                      additionalProperties: false,
+                      required: true,
+                      properties: {
+                        text: { type: 'string', required: true },
+                        truncated: { type: 'boolean', required: true },
+                      },
+                    },
+                    sandbox: {
+                      type: 'object',
+                      additionalProperties: false,
+                      properties: {
+                        mode: { type: 'string', required: true },
+                        denied: { type: 'boolean', required: true },
+                      },
+                    },
                   },
                 },
-              },
+              ],
             },
-            render: (_args: unknown, value: unknown) => [{ type: 'text', text: renderBashResult(value as BashResult) }],
+            render: (_args: unknown, value: unknown) => {
+              const v = value as BashResult | { kind: 'background'; jobId: string }
+              if (typeof v === 'object' && v !== null && 'kind' in v && v.kind === 'background') {
+                return [{ type: 'text', text: `started background job ${v.jobId}` }]
+              }
+              return [{ type: 'text', text: renderBashResult(v as BashResult, escalationModes) }]
+            },
           },
           async execute(args: BashToolArgs, exec) {
             if (args.command.trim().length === 0) {
@@ -207,6 +272,99 @@ export function apply(ctx: AppContext, config: Config): void {
             if (args.description.trim().length === 0) {
               throw new Error('invalid description: expected a non-empty string')
             }
+            validateEscalationArgs(args.sandbox_permissions, args.justification)
+
+            // workdir：显式相对路径按 session cwd 解析；缺省用 session cwd。
+            const headerCwd = exec.agent?.session.header.cwd
+            let workdir = args.workdir
+            if (workdir !== undefined && headerCwd !== undefined && !isAbsolute(workdir)) {
+              workdir = resolve(headerCwd, workdir)
+            } else if (workdir === undefined) {
+              workdir = headerCwd ?? process.cwd()
+            }
+
+            // 沙箱策略：standing policy + 升级请求。
+            const sandbox = ctx.get('sandbox')
+            const sandboxPolicy: SandboxPolicyService | undefined = ctx.get('sandboxPolicy')
+            const standingPolicy = sandboxPolicy?.resolve(exec.agent === undefined ? {} : { session: exec.agent.session })
+            let policy: SandboxExecutionPolicy | undefined = standingPolicy
+            if (args.sandbox_permissions !== undefined && args.justification !== undefined) {
+              if (escalationModes.length === 0) {
+                throw new Error('sandbox_permissions is not available in this composition (no sandboxing executor to escalate)')
+              }
+              const approvedMode = await approveEscalation(
+                { requestedMode: args.sandbox_permissions, justification: args.justification, effectiveMode: (standingPolicy as SandboxExecutionPolicy).mode, subject: 'command' },
+                {
+                  approver: ctx.get('approval'),
+                  agent: exec.agent,
+                  callId: exec.callId,
+                  toolName: 'bash',
+                  signal: exec.signal,
+                },
+              )
+              policy = { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
+            }
+
+            // argv 构造 + 沙箱 confine。
+            let argv: string[] = [probe.path, '-c', args.command]
+            let confined: ConfinedArgv | undefined
+            if (policy !== undefined && policy.mode !== 'danger-full-access' && sandbox !== undefined) {
+              confined = sandbox.confine(argv, { ...policy, mode: policy.mode })
+              argv = confined.argv
+            }
+
+            const collect = { maxBytes: 64_000, spill: { maxBytes: 64 * 1024 * 1024 } }
+            const spawnSpec = (signal: AbortSignal | undefined): SubprocessSpawnSpec => ({
+              argv,
+              cwd: workdir,
+              stdio: { stdin: 'ignore', stdout: collect, stderr: collect },
+              graceMs: 3_000,
+              signal,
+              env: collectDshEnv(),
+            })
+
+            // 后台：jobs 通道，cancel/readOutput 增量。
+            if (args.run_in_background === true) {
+              const jobs = ctx.get('jobs')
+              if (jobs === undefined) {
+                throw new Error('background jobs unavailable: load @deepseek-ai/dsh-jobs and @deepseek-ai/dsh-tool-jobs')
+              }
+              if (exec.signal.aborted) {
+                const error = new HarnessError('tool call aborted', TOOL_ABORTED)
+                error.name = 'AbortError'
+                throw error
+              }
+              const id = jobs.start({
+                kind: 'bash',
+                label: args.command,
+                ...exec.agent ? { owner: exec.agent } : {},
+                run: () => {
+                  const handle = ctx.subprocess.spawn(spawnSpec(undefined))
+                  let stdoutOffset = 0
+                  let stderrOffset = 0
+                  return {
+                    cancel: () => handle.terminate(),
+                    done: handle.done.then((outcome): JobOutcome => ({
+                      status: outcome.exitCode === 0 ? 'completed' : 'failed',
+                      detail: `exit code: ${outcome.exitCode}`,
+                    })),
+                    readOutput: () => {
+                      const out = handle.collected.stdout?.readFrom(stdoutOffset)
+                      const err = handle.collected.stderr?.readFrom(stderrOffset)
+                      stdoutOffset = out?.nextOffset ?? stdoutOffset
+                      stderrOffset = err?.nextOffset ?? stderrOffset
+                      const outText = out?.text ?? ''
+                      const errText = err?.text ?? ''
+                      const separator = outText.length > 0 && !outText.endsWith('\n') ? '\n' : ''
+                      return outText + (errText.length > 0 ? `${separator}[stderr]\n${errText}` : '')
+                    },
+                  }
+                },
+              })
+              return { kind: 'background' as const, jobId: id }
+            }
+
+            // 前台。
             const timeoutMs = args.timeoutMs !== undefined && Number.isFinite(args.timeoutMs) && args.timeoutMs > 0
               ? args.timeoutMs
               : 120_000
@@ -214,26 +372,29 @@ export function apply(ctx: AppContext, config: Config): void {
             const timer = setTimeout(() => controller.abort(), timeoutMs)
             const onAbort = (): void => controller.abort()
             exec.signal?.addEventListener('abort', onAbort)
-            const collect = { maxBytes: 64_000, spill: { maxBytes: 64 * 1024 * 1024 } }
             try {
-              const handle = ctx.subprocess.spawn({
-                argv: [probe.path, '-c', args.command],
-                cwd: args.workdir ?? process.cwd(),
-                stdio: { stdin: 'ignore', stdout: collect, stderr: collect },
-                graceMs: 3_000,
-                signal: controller.signal,
-                env: collectDshEnv(),
-              } satisfies SubprocessSpawnSpec)
+              const handle = ctx.subprocess.spawn(spawnSpec(controller.signal))
               const outcome = await handle.done
               const out = handle.collected.stdout?.readFrom(0)
               const err = handle.collected.stderr?.readFrom(0)
-              return {
+              const stderrText = err?.text ?? ''
+              const denied = confined !== undefined
+                && outcome.exitCode !== 0
+                && confined.denialSignatures.some((signature) => stderrText.toLowerCase().includes(signature.toLowerCase()))
+              const result: BashResult = {
                 exitCode: outcome.exitCode,
                 timedOut: controller.signal.aborted && exec.signal?.aborted !== true,
                 aborted: exec.signal?.aborted === true,
                 stdout: { text: out?.text ?? '', truncated: out?.lossy ?? false },
-                stderr: { text: err?.text ?? '', truncated: err?.lossy ?? false },
-              } satisfies BashResult
+                stderr: { text: stderrText, truncated: err?.lossy ?? false },
+                ...denied ? { sandbox: { mode: policy?.mode ?? 'read-only', denied: true } } : {},
+              }
+              if (result.aborted) {
+                const error = new HarnessError('tool call aborted', TOOL_ABORTED)
+                error.name = 'AbortError'
+                throw error
+              }
+              return result
             } finally {
               clearTimeout(timer)
               exec.signal?.removeEventListener('abort', onAbort)
@@ -250,58 +411,33 @@ export function apply(ctx: AppContext, config: Config): void {
             const block = result.content.length === 1 ? result.content[0] : undefined
             if (block === undefined || block.type !== 'text' || block.text === undefined) return undefined
             const raw = block.text
-            if (result.isError) {
+            const isBackground = typeof args === 'object' && args !== null && (args as { run_in_background?: unknown }).run_in_background === true
+            if (isBackground || result.isError) {
               return { card: 'generic', content: [{ type: 'text', text: `\`\`\`console\n${raw.replace(/\n+$/, '')}\n\`\`\`` }] }
             }
             const { body, ...exit } = parseExitStatus(raw)
             return { card: 'terminal', output: body, ...exit }
           },
         }))
+        registerError = undefined
         ctx.logger.info('[shell-policy] bash 工具已注册（%s）', probe.path)
       } catch (error) {
         bashDisposer = undefined
         effective = 'pwsh'
-        ctx.logger.warn('[shell-policy] bash 工具注册失败，回落 pwsh: %s', String(error))
+        registerError = String(error)
+        ctx.logger.warn('[shell-policy] bash 工具注册失败，回落 pwsh: %s', registerError)
       }
     } else {
       bashDisposer?.()
       bashDisposer = undefined
+      registerError = undefined
       ctx.logger.info('[shell-policy] 生效 shell: pwsh')
     }
   }
 
-  // settings 装配：preferred/bashPath 可被用户层覆盖，变化时重新应用策略。
-  installSettingsSection(ctx, NS, Config, entry, {
-    setSource: (current) => { source = current },
-    onChange: applyPolicy,
-  })
-
-  // 无 settings 服务时的兜底（settings 服务存在时 applyPolicy 幂等跳过）。
-  applyPolicy()
-
-  // 提示词工具面裁剪：effective=bash 时隐藏 pwsh，反之隐藏 bash。
-  ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
-    const assembled = await next()
-    if (effective === 'bash') {
-      return { ...assembled, tools: assembled.tools.filter((tool) => tool.name !== 'pwsh') }
-    }
-    if (effective === 'pwsh') {
-      return { ...assembled, tools: assembled.tools.filter((tool) => tool.name !== 'bash') }
-    }
-    return assembled
-  })
-
-  // 引导文本。
-  ctx.systemPrompt.section({
-    name: 'shell-policy',
-    order: 104,
-    text: 'Windows shell policy: the `bash` tool (git-bash) is the default shell. '
-      + 'Check the [exit code: N] marker on every bash result; investigate failures before moving on.',
-  })
-
-  // 状态 API（client 卡片消费）。settings 的 client 端 RPC 有 allowlist
-  // 限制（apiproxy WEB_SETTINGS_NAMESPACES），本插件 namespace 不在其中，
-  // 因此卡片读写都走本 API：host 端直接经 settings 服务持久化。
+  // 状态与配置 API（所有平台注册；非 Windows 返回 supported: false）。
+  // settings 的 client 端 RPC 有 allowlist 限制（apiproxy WEB_SETTINGS_NAMESPACES），
+  // 本插件 namespace 不在其中，因此卡片读写都走本 API：host 端直接经 settings 服务持久化。
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/dsh-shell-policy/api',
@@ -314,10 +450,13 @@ export function apply(ctx: AppContext, config: Config): void {
       if (url.endsWith('/status') && req.method === 'GET') {
         send(200, {
           platform: process.platform,
+          supported: isWindows,
           bashFound: probe.found,
           bashPath: probe.path,
           effective,
           preferred: source().preferred,
+          configuredBashPath: source().bashPath,
+          registerError,
         })
         return
       }
@@ -353,9 +492,72 @@ export function apply(ctx: AppContext, config: Config): void {
         }
         return
       }
+      if (url.endsWith('/bashpath') && req.method === 'POST') {
+        const raw = await new Promise<string>((resolve, reject) => {
+          let data = ''
+          req.on('data', (chunk: any) => { data += chunk })
+          req.on('end', () => resolve(data))
+          req.on('error', reject)
+        })
+        let parsed: { bashPath?: unknown }
+        try {
+          parsed = JSON.parse(raw) as { bashPath?: unknown }
+        } catch {
+          send(400, { ok: false, error: 'invalid json body' })
+          return
+        }
+        const bashPath = typeof parsed.bashPath === 'string' ? parsed.bashPath.trim() : ''
+        const settings = ctx.get('settings')
+        if (settings === undefined) {
+          send(500, { ok: false, error: 'settings service unavailable' })
+          return
+        }
+        try {
+          await settings.mutate(NS, [{ op: 'set', path: ['bashPath'], value: bashPath }])
+          send(200, { ok: true, bashPath, effective })
+        } catch (error) {
+          send(500, { ok: false, error: String(error) })
+        }
+        return
+      }
       send(404, { ok: false, error: 'not found' })
     },
   }), 'dsh-windows-shell-policy: status api')
+
+  // 非 Windows：DSH 默认 bash 工具已可用，本插件跳过（不注册工具、不过滤、不注册引导）。
+  if (!isWindows) {
+    ctx.logger.info('[shell-policy] 非 Windows 平台，插件跳过（DSH 默认 bash 工具已可用）')
+    return
+  }
+
+  // settings 装配：preferred/bashPath 可被用户层覆盖，变化时重新应用策略。
+  installSettingsSection(ctx, NS, Config, entry, {
+    setSource: (current) => { source = current },
+    onChange: applyPolicy,
+  })
+
+  // 无 settings 服务时的兜底（settings 服务存在时 applyPolicy 幂等跳过）。
+  applyPolicy()
+
+  // 提示词工具面裁剪：effective=bash 时隐藏 pwsh，反之隐藏 bash。
+  ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+    const assembled = await next()
+    if (effective === 'bash') {
+      return { ...assembled, tools: assembled.tools.filter((tool) => tool.name !== 'pwsh') }
+    }
+    if (effective === 'pwsh') {
+      return { ...assembled, tools: assembled.tools.filter((tool) => tool.name !== 'bash') }
+    }
+    return assembled
+  })
+
+  // 引导文本。
+  ctx.systemPrompt.section({
+    name: 'shell-policy',
+    order: 104,
+    text: 'Windows shell policy: the `bash` tool (git-bash) is the default shell. '
+      + 'Check the [exit code: N] marker on every bash result; investigate failures before moving on.',
+  })
 
   // 卸载清理：注销动态注册的 bash 工具。
   ctx.effect(() => () => {

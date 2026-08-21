@@ -56,6 +56,9 @@ link_pkg @deepseek-ai/dsh-llm packages/llm/llm
 link_pkg @deepseek-ai/dsh-system-prompt packages/core/system-prompt
 link_pkg @deepseek-ai/dsh-subprocess packages/subprocess/subprocess
 link_pkg @deepseek-ai/dsh-settings packages/settings/settings
+link_pkg @deepseek-ai/dsh-sandbox packages/sandbox/sandbox
+link_pkg @deepseek-ai/dsh-sandbox-policy packages/sandbox/sandbox-policy
+link_pkg @deepseek-ai/dsh-jobs packages/jobs/jobs
 # @types/node（编译类型；checkout 自带）
 link_pkg @types/node node_modules/@types/node
 
