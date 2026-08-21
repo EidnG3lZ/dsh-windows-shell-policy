@@ -1,5 +1,12 @@
 # dsh-windows-shell-policy — 组合插件（发布轨）
 
+[![npm version](https://img.shields.io/npm/v/@dsh-external/dsh-windows-shell-policy)](https://www.npmjs.com/package/@dsh-external/dsh-windows-shell-policy)
+[![npm downloads](https://img.shields.io/npm/dw/@dsh-external/dsh-windows-shell-policy)](https://www.npmjs.com/package/@dsh-external/dsh-windows-shell-policy)
+[![GitHub release](https://img.shields.io/github/v/release/LAN-TINA-WS/dsh-windows-shell-policy)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/releases/latest)
+[![GitHub downloads](https://img.shields.io/github/downloads/LAN-TINA-WS/dsh-windows-shell-policy/total)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy/releases)
+[![GitHub stars](https://img.shields.io/github/stars/LAN-TINA-WS/dsh-windows-shell-policy)](https://github.com/LAN-TINA-WS/dsh-windows-shell-policy)
+[![license](https://img.shields.io/github/license/LAN-TINA-WS/dsh-windows-shell-policy)](LICENSE)
+
 Windows 默认 Shell 策略组合插件（hybrid 形态）：探测 git-bash/MSYS2/Cygwin，在「设置 → 插件 → 插件配置」提供「默认 Shell」折叠卡片切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面。解决 Windows 上 DSH 默认走 PowerShell、agent 执行 POSIX 命令错误率高的问题（LLM 训练语料中 bash 占比远高于 PowerShell）。
 
 ## 功能
