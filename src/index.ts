@@ -17,7 +17,7 @@ import type { Context } from 'cordis'
 import z from 'schemastery'
 import { defineTool, TOOL_ABORTED } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
+import type {} from '@deepseek-ai/dsh-settings'
 import type { SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import { ESCALATION_TARGETS, approveEscalation, sandboxDenialMarker, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
@@ -36,7 +36,7 @@ export const name = 'dsh-windows-shell-policy'
 export const inject = ['tools', 'subprocess', 'systemPrompt', 'webServer']
 
 /** 本插件拥有的 settings namespace（与官方 shell namespace 区分）。 */
-const NS = settingsNamespace('shell-policy')
+const SETTINGS_NAMESPACE = 'shell-policy'
 
 export interface Config {
   /** 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。 */
@@ -485,7 +485,7 @@ export function apply(ctx: AppContext, config: Config): void {
           return
         }
         try {
-          await settings.mutate(NS, [{ op: 'set', path: ['preferred'], value: preferred }])
+          await settings.mutate(SETTINGS_NAMESPACE, [{ op: 'set', path: ['preferred'], value: preferred }])
           send(200, { ok: true, preferred, effective })
         } catch (error) {
           send(500, { ok: false, error: String(error) })
@@ -513,7 +513,7 @@ export function apply(ctx: AppContext, config: Config): void {
           return
         }
         try {
-          await settings.mutate(NS, [{ op: 'set', path: ['bashPath'], value: bashPath }])
+          await settings.mutate(SETTINGS_NAMESPACE, [{ op: 'set', path: ['bashPath'], value: bashPath }])
           send(200, { ok: true, bashPath, effective })
         } catch (error) {
           send(500, { ok: false, error: String(error) })
@@ -531,9 +531,13 @@ export function apply(ctx: AppContext, config: Config): void {
   }
 
   // settings 装配：preferred/bashPath 可被用户层覆盖，变化时重新应用策略。
-  installSettingsSection(ctx, NS, Config, entry, {
-    setSource: (current) => { source = current },
-    onChange: applyPolicy,
+  // DSH 0.1.5：顶层 installSettingsSection 已移除；改为注入 settings 服务后
+  // 由 provider.installSection 注册（服务缺席时保留 entry 兜底语义）。
+  ctx.inject(['settings'], (settingsCtx) => {
+    settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, Config, entry, {
+      setSource: (current) => { source = current },
+      onChange: applyPolicy,
+    })
   })
 
   // 无 settings 服务时的兜底（settings 服务存在时 applyPolicy 幂等跳过）。
