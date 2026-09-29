@@ -35,8 +35,27 @@ declare module '@deepseek-ai/dsh-jobs' {
 export const name = 'dsh-windows-shell-policy'
 export const inject = ['tools', 'subprocess', 'systemPrompt', 'webServer']
 
-/** 本插件拥有的 settings namespace（与官方 shell namespace 区分）。 */
-const SETTINGS_NAMESPACE = 'shell-policy'
+/** 本插件的包名（也是 profile entry 的 name，用于解析自身 entry id）。 */
+const PKG_NAME = 'dsh-windows-shell-policy'
+
+/**
+ * 解析本插件在 profile 中的 entry id。
+ * DSH 0.2.0 起 settings 的配置 namespace 即 profile entry id（插件 Config schema
+ * 自动投影为表单），不再有插件自定义 namespace 的注册机制。
+ */
+function resolveOwnEntryId(ctx: Context): string | undefined {
+  const loader = (ctx as {
+    loader?: { entries(): Iterable<{ options?: { id?: unknown; name?: unknown } }> }
+  }).loader
+  if (loader === undefined || typeof loader.entries !== 'function') return undefined
+  for (const entry of loader.entries()) {
+    const options = entry.options
+    if (options !== undefined && String(options.name ?? '') === PKG_NAME && typeof options.id === 'string') {
+      return options.id
+    }
+  }
+  return undefined
+}
 
 export interface Config {
   /** 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。 */
@@ -305,11 +324,11 @@ export function apply(ctx: AppContext, config: Config): void {
               policy = { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
             }
 
-            // argv 构造 + 沙箱 confine。
+            // argv 构造 + 沙箱 confine（DSH 0.2.0 起 confine 为异步）。
             let argv: string[] = [probe.path, '-c', args.command]
             let confined: ConfinedArgv | undefined
             if (policy !== undefined && policy.mode !== 'danger-full-access' && sandbox !== undefined) {
-              confined = sandbox.confine(argv, { ...policy, mode: policy.mode })
+              confined = await sandbox.confine(argv, { ...policy, mode: policy.mode })
               argv = confined.argv
             }
 
@@ -337,7 +356,8 @@ export function apply(ctx: AppContext, config: Config): void {
               const id = jobs.start({
                 kind: 'bash',
                 label: args.command,
-                ...exec.agent ? { owner: exec.agent } : {},
+                // DSH 0.2.0 起 owner 为 SessionId（不再是 Agent 实例）。
+                ...exec.agent ? { owner: exec.agent.id } : {},
                 run: () => {
                   const handle = ctx.subprocess.spawn(spawnSpec(undefined))
                   let stdoutOffset = 0
@@ -480,12 +500,13 @@ export function apply(ctx: AppContext, config: Config): void {
           return
         }
         const settings = ctx.get('settings')
-        if (settings === undefined) {
-          send(500, { ok: false, error: 'settings service unavailable' })
+        const entryId = resolveOwnEntryId(ctx)
+        if (settings === undefined || entryId === undefined) {
+          send(500, { ok: false, error: settings === undefined ? 'settings service unavailable' : 'own profile entry not found' })
           return
         }
         try {
-          await settings.mutate(SETTINGS_NAMESPACE, [{ op: 'set', path: ['preferred'], value: preferred }])
+          await settings.mutate(entryId, [{ op: 'set', path: ['preferred'], value: preferred }])
           send(200, { ok: true, preferred, effective })
         } catch (error) {
           send(500, { ok: false, error: String(error) })
@@ -508,12 +529,13 @@ export function apply(ctx: AppContext, config: Config): void {
         }
         const bashPath = typeof parsed.bashPath === 'string' ? parsed.bashPath.trim() : ''
         const settings = ctx.get('settings')
-        if (settings === undefined) {
-          send(500, { ok: false, error: 'settings service unavailable' })
+        const entryId = resolveOwnEntryId(ctx)
+        if (settings === undefined || entryId === undefined) {
+          send(500, { ok: false, error: settings === undefined ? 'settings service unavailable' : 'own profile entry not found' })
           return
         }
         try {
-          await settings.mutate(SETTINGS_NAMESPACE, [{ op: 'set', path: ['bashPath'], value: bashPath }])
+          await settings.mutate(entryId, [{ op: 'set', path: ['bashPath'], value: bashPath }])
           send(200, { ok: true, bashPath, effective })
         } catch (error) {
           send(500, { ok: false, error: String(error) })
@@ -530,17 +552,20 @@ export function apply(ctx: AppContext, config: Config): void {
     return
   }
 
-  // settings 装配：preferred/bashPath 可被用户层覆盖，变化时重新应用策略。
-  // DSH 0.1.5：顶层 installSettingsSection 已移除；改为注入 settings 服务后
-  // 由 provider.installSection 注册（服务缺席时保留 entry 兜底语义）。
-  ctx.inject(['settings'], (settingsCtx) => {
-    settingsCtx.settings.installSection(ctx, SETTINGS_NAMESPACE, Config, entry, {
-      setSource: (current) => { source = current },
-      onChange: applyPolicy,
-    })
-  })
+  // DSH 0.2.0：settings 改为从插件 Config schema 自动投影表单，插件侧不再注册
+  // namespace（installSettingsSection / installSection 均已移除）。配置来源即本插件的
+  // entry config（apply 收到的 config）；配置变更由 Loader 重建 entry 后重新 apply。
+  // 显式声明自动生成表单，并吞掉旧版本无此方法时的错误（策略生效不依赖它）。
+  const settings = ctx.get('settings') as { configure?(presentation: { auto?: boolean }): () => void } | undefined
+  if (settings !== undefined && typeof settings.configure === 'function') {
+    try {
+      ctx.effect(() => (settings.configure as (p: { auto?: boolean }) => () => void)({ auto: true }), 'dsh-windows-shell-policy: settings form')
+    } catch (error) {
+      ctx.logger.warn('[shell-policy] settings.configure 不可用（忽略）: %s', String(error))
+    }
+  }
 
-  // 无 settings 服务时的兜底（settings 服务存在时 applyPolicy 幂等跳过）。
+  // 应用策略（bash 工具注册 / 注销）。
   applyPolicy()
 
   // 提示词工具面裁剪：effective=bash 时隐藏 pwsh，反之隐藏 bash。

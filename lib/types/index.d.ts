@@ -28,13 +28,13 @@ export interface Config {
     /** 显式 bash 可执行文件路径；留空则自动探测。 */
     bashPath: string;
 }
-export declare const Config: z<Schemastery.ObjectS<{
-    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh">;
-    bashPath: z<string, string>;
-}>, Schemastery.ObjectT<{
-    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh">;
-    bashPath: z<string, string>;
-}>>;
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh", "defined">;
+    bashPath: z<string, string, "defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh", "defined">;
+    bashPath: z<string, string, "defined">;
+}>>, "plain">;
 /** 本插件消费的 host 服务面（webServer 类型由本包声明）。 */
 type AppContext = Context & {
     webServer: {
