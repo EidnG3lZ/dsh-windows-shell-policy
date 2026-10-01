@@ -48,8 +48,7 @@
   },
   "scripts": {
     "build": "bash scripts/build.sh",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "prepublishOnly": "npm run build"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "exports": {
     ".": {
