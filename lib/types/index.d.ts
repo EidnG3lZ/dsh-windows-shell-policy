@@ -13,7 +13,7 @@
  * 5. 提供 /dsh-shell-policy/api 供 client 卡片读写状态与配置。
  * 6. 非 Windows 平台直接跳过（DSH 默认 bash 工具已可用），仅保留状态 API。
  */
-import type { Context } from 'cordis';
+import type { Context, Volatile } from 'cordis';
 import z from 'schemastery';
 declare module '@deepseek-ai/dsh-jobs' {
     interface JobKindMap {
@@ -23,17 +23,21 @@ declare module '@deepseek-ai/dsh-jobs' {
 export declare const name = "dsh-windows-shell-policy";
 export declare const inject: string[];
 export interface Config {
-    /** 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。 */
-    preferred: 'auto' | 'bash' | 'pwsh';
+    /**
+     * 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。
+     * DSH 0.2.0 起 live 配置必须是 volatile 引用（settings 从 Config schema 投影表单），
+     * 读取时用 {@link unwrapVolatile} 解包。
+     */
+    preferred: Volatile<'auto' | 'bash' | 'pwsh'>;
     /** 显式 bash 可执行文件路径；留空则自动探测。 */
-    bashPath: string;
+    bashPath: Volatile<string>;
 }
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
-    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh", "defined">;
-    bashPath: z<string, string, "defined">;
+    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh", "volatile-defined">;
+    bashPath: z<string, string, "volatile-defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
-    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh", "defined">;
-    bashPath: z<string, string, "defined">;
+    preferred: z<"bash" | "auto" | "pwsh", "bash" | "auto" | "pwsh", "volatile-defined">;
+    bashPath: z<string, string, "volatile-defined">;
 }>>, "plain">;
 /** 本插件消费的 host 服务面（webServer 类型由本包声明）。 */
 type AppContext = Context & {

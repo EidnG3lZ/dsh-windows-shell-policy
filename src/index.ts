@@ -13,7 +13,7 @@
  * 5. 提供 /dsh-shell-policy/api 供 client 卡片读写状态与配置。
  * 6. 非 Windows 平台直接跳过（DSH 默认 bash 工具已可用），仅保留状态 API。
  */
-import type { Context } from 'cordis'
+import type { Context, Volatile } from 'cordis'
 import z from 'schemastery'
 import { defineTool, TOOL_ABORTED } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
@@ -58,18 +58,43 @@ function resolveOwnEntryId(ctx: Context): string | undefined {
 }
 
 export interface Config {
-  /** 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。 */
-  preferred: 'auto' | 'bash' | 'pwsh'
+  /**
+   * 首选 shell：auto（探测到 bash 则用 bash，否则 pwsh）/ bash / pwsh。
+   * DSH 0.2.0 起 live 配置必须是 volatile 引用（settings 从 Config schema 投影表单），
+   * 读取时用 {@link unwrapVolatile} 解包。
+   */
+  preferred: Volatile<'auto' | 'bash' | 'pwsh'>
   /** 显式 bash 可执行文件路径；留空则自动探测。 */
-  bashPath: string
+  bashPath: Volatile<string>
 }
 
 export const Config = z.object({
-  preferred: z.union([z.const('auto'), z.const('bash'), z.const('pwsh')]).default('auto'),
-  bashPath: z.string().default(''),
+  preferred: z.union([z.const('auto'), z.const('bash'), z.const('pwsh')]).default('auto').volatile(),
+  bashPath: z.string().default('').volatile(),
 })
 
+/** 插件 apply 收到的原始 config（volatile 字段为引用对象）。 */
+type RawConfig = { preferred: unknown; bashPath: unknown }
+
+/** 解包 volatile 引用（结构检测：带 get() 的引用对象；非引用值原样返回）。 */
+function unwrapVolatile<T>(value: unknown): T {
+  if (typeof value === 'object' && value !== null && typeof (value as { get?: unknown }).get === 'function') {
+    return (value as { get(): T }).get()
+  }
+  return value as T
+}
+
 type ResolvedConfig = { preferred: 'auto' | 'bash' | 'pwsh'; bashPath: string }
+
+/** 从原始 config 读当前生效值（每次调用都取 volatile 最新快照）。 */
+function readConfig(raw: RawConfig): ResolvedConfig {
+  const preferred = unwrapVolatile(raw.preferred)
+  const bashPath = unwrapVolatile(raw.bashPath)
+  return {
+    preferred: preferred === 'bash' || preferred === 'pwsh' ? preferred : 'auto',
+    bashPath: typeof bashPath === 'string' ? bashPath : '',
+  }
+}
 
 /** bash 探测结果。 */
 interface BashProbe {
@@ -178,16 +203,17 @@ type AppContext = Context & {
 
 export function apply(ctx: AppContext, config: Config): void {
   const isWindows = process.platform === 'win32'
-  const entry = config as ResolvedConfig
-  let source: () => ResolvedConfig = () => entry
-  let probe: BashProbe = probeBash(entry.bashPath)
+  // 0.2.0 起 config 的 live 字段是 volatile 引用；读取一律经 readConfig(source())。
+  const entry = config as unknown as RawConfig
+  let source: () => RawConfig = () => entry
+  let probe: BashProbe = probeBash(readConfig(entry).bashPath)
   let effective: 'bash' | 'pwsh' = 'pwsh'
   let bashDisposer: (() => void) | undefined
   let registerError: string | undefined
 
   /** 按当前配置重新应用策略：探测 bash、切换工具注册。幂等。 */
   const applyPolicy = (): void => {
-    const cfg = source()
+    const cfg = readConfig(source())
     probe = probeBash(cfg.bashPath)
     const wanted = cfg.preferred === 'auto' ? (probe.found ? 'bash' : 'pwsh') : cfg.preferred
     const next = wanted === 'bash' && probe.found ? 'bash' : 'pwsh'
@@ -474,8 +500,8 @@ export function apply(ctx: AppContext, config: Config): void {
           bashFound: probe.found,
           bashPath: probe.path,
           effective,
-          preferred: source().preferred,
-          configuredBashPath: source().bashPath,
+          preferred: readConfig(source()).preferred,
+          configuredBashPath: readConfig(source()).bashPath,
           registerError,
         })
         return
