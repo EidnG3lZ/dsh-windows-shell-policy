@@ -2,6 +2,16 @@
 
 本项目的所有重要变更记录于此。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.0.6] - 2026-10-01
+
+### 变更
+
+- **适配 DSH 0.2.0 配置架构**：
+  - Config 字段标记 `.volatile()`（0.2.0 的 live 配置要求；未标记则设置页不显示、写入报错）
+  - 读取经 volatile 解包（结构检测，零依赖）
+  - client 配置页注册迁移到 `plugins.bundle.config`（0.2.0 的 bundle 配置槽位，渲染在插件管理页的插件详情页内）
+  - 保留 0.1.x 的 `settings.plugin.item` 注册（旧版兼容，0.2.0 下无副作用）
+
 ## [0.0.5] - 2026-08-21
 
 ### 修复

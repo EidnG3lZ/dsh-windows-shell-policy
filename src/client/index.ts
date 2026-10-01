@@ -142,6 +142,16 @@ const bodyStyle: Record<string, string> = {
   paddingBottom: '8px',
 }
 
+/** 0.2.0 bundle 配置页容器（插件详情页内，无折叠头）。 */
+const pageStyle: Record<string, string> = {
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2)',
+  borderRadius: '12px',
+  background: 'var(--dsw-alias-bg-layer-3)',
+  padding: '4px 16px 8px',
+}
+
 const statusStyle: Record<string, string> = {
   margin: '12px 0 4px',
   fontSize: '12px',
@@ -262,9 +272,14 @@ const disabledStyle: Record<string, string> = {
   cursor: 'default',
 }
 
-/** 卡片组件：折叠头部 + 展开控件（状态行 + 选择器 + bashPath + staged 保存）。 */
-function ShellPolicyCard(props: { remote: ClientContext['remote'] }) {
-  const { remote } = props
+/**
+ * 配置组件：三种视图。
+ * - `page`（DSH 0.2.0 的 plugins.bundle.config）：直接渲染配置面板（插件详情页内，无折叠）。
+ * - `summary`：一行状态摘要。
+ * - 未指定（0.1.x 的 settings.plugin.item）：折叠卡片。
+ */
+function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientContext['remote'] }) {
+  const { view, remote } = props
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<Status | null>(null)
   const [draft, setDraft] = useState<string | null>(null)
@@ -352,6 +367,62 @@ function ShellPolicyCard(props: { remote: ClientContext['remote'] }) {
     ? `bash 工具注册失败：${status.registerError}`
     : null
 
+  // 配置面板内容（page 与折叠卡片的展开体共用）。
+  const controls = [
+    registerErrorLine !== null
+      ? createElement('div', { key: 'status', style: errorStatusStyle }, registerErrorLine)
+      : createElement('div', { key: 'status', style: statusStyle }, statusLine),
+    ...options.map((opt) => createElement('label', { key: opt.value, style: optionStyle },
+      createElement('input', {
+        type: 'radio',
+        name: 'shell-policy-preferred',
+        checked: staged === opt.value,
+        disabled: saving,
+        onChange: () => setDraft(opt.value),
+      }),
+      createElement('span', { style: optionLabelStyle }, opt.label),
+      createElement('span', { style: optionHintStyle }, opt.hint),
+    )),
+    createElement('div', { key: 'bashpath', style: fieldStyle },
+      createElement('span', { style: fieldLabelStyle }, 'bash 可执行文件路径'),
+      createElement('input', {
+        type: 'text',
+        style: inputStyle,
+        value: stagedBashPath,
+        placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PATH）',
+        disabled: saving,
+        onChange: (event: { target: { value: string } }) => setDraftBashPath(event.target.value),
+      }),
+      createElement('span', { style: fieldHintStyle }, '显式指定 bash.exe 路径；留空则自动探测。'),
+    ),
+    createElement('div', { key: 'footer', style: footerStyle },
+      failed ? createElement('p', { style: failedStyle, role: 'status' }, '保存失败，请重试') : null,
+      createElement('button', {
+        type: 'button',
+        style: { ...discardStyle, ...(!dirty || saving ? disabledStyle : {}) },
+        disabled: !dirty || saving,
+        onClick: discard,
+      }, '放弃'),
+      createElement('button', {
+        type: 'button',
+        style: { ...saveStyle, ...(blocked ? disabledStyle : {}) },
+        disabled: blocked,
+        onClick: save,
+      }, saving ? '保存中...' : '保存'),
+    ),
+  ]
+
+  // summary：官方卡片/行的一行摘要。
+  if (view === 'summary') {
+    return createElement('span', null, registerErrorLine ?? statusLine)
+  }
+
+  // page：DSH 0.2.0 的 bundle 配置页（插件详情页内，无折叠）。
+  if (view === 'page') {
+    return createElement('div', { style: pageStyle }, ...controls)
+  }
+
+  // 旧版 settings.plugin.item：折叠卡片。
   return createElement('li', { style: { ...cardStyle, ...(open ? cardOpenStyle : {}) } },
     createElement('button', {
       type: 'button',
@@ -369,63 +440,33 @@ function ShellPolicyCard(props: { remote: ClientContext['remote'] }) {
         createElement(ChevronIcon),
       ),
     ),
-    open ? createElement('div', { style: bodyStyle },
-      registerErrorLine !== null
-        ? createElement('div', { style: errorStatusStyle }, registerErrorLine)
-        : createElement('div', { style: statusStyle }, statusLine),
-      ...options.map((opt) => createElement('label', { key: opt.value, style: optionStyle },
-        createElement('input', {
-          type: 'radio',
-          name: 'shell-policy-preferred',
-          checked: staged === opt.value,
-          disabled: saving,
-          onChange: () => setDraft(opt.value),
-        }),
-        createElement('span', { style: optionLabelStyle }, opt.label),
-        createElement('span', { style: optionHintStyle }, opt.hint),
-      )),
-      createElement('div', { style: fieldStyle },
-        createElement('span', { style: fieldLabelStyle }, 'bash 可执行文件路径'),
-        createElement('input', {
-          type: 'text',
-          style: inputStyle,
-          value: stagedBashPath,
-          placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PATH）',
-          disabled: saving,
-          onChange: (event: { target: { value: string } }) => setDraftBashPath(event.target.value),
-        }),
-        createElement('span', { style: fieldHintStyle }, '显式指定 bash.exe 路径；留空则自动探测。'),
-      ),
-      createElement('div', { style: footerStyle },
-        failed ? createElement('p', { style: failedStyle, role: 'status' }, '保存失败，请重试') : null,
-        createElement('button', {
-          type: 'button',
-          style: { ...discardStyle, ...(!dirty || saving ? disabledStyle : {}) },
-          disabled: !dirty || saving,
-          onClick: discard,
-        }, '放弃'),
-        createElement('button', {
-          type: 'button',
-          style: { ...saveStyle, ...(blocked ? disabledStyle : {}) },
-          disabled: blocked,
-          onClick: save,
-        }, saving ? '保存中...' : '保存'),
-      ),
-    ) : null,
+    open ? createElement('div', { style: bodyStyle }, ...controls) : null,
   )
 }
 
 export function apply(ctx: ClientContext): void {
   const remote = ctx.remote
+  // DSH 0.2.0：bundle 自己的配置页注册到 plugins.bundle.config（key = 包名），
+  // 渲染在插件管理页的 bundle 详情页内（描述与行列表之间）。
+  ctx.effect(() => ctx.slots.inject('plugins.bundle.config', () =>
+    ctx.slots.register({
+      name: 'plugins.bundle.config',
+      key: 'dsh-windows-shell-policy',
+      label: () => '默认 Shell',
+      inject: () => ({ remote }),
+    } as any, ShellPolicyCard as any),
+  ), 'dsh-windows-shell-policy: bundle config page')
+
+  // 0.1.x 兼容：旧版「设置 → 插件 → 插件配置」的卡片槽位（0.2.0 已移除该槽位，
+  // slots.inject 对未声明的槽位不会执行回调，因此无副作用）。
   ctx.effect(() => ctx.slots.inject('settings.plugin.item', () =>
     ctx.slots.register({
       name: 'settings.plugin.item',
       id: 'shell-policy',
-      // rc.7 起该 slot 为 kind:'keyed'，注册必须带 key（list 下多余字段被忽略，向后兼容）
       key: 'shell-policy',
       order: 5,
       label: () => '默认 Shell',
       inject: () => ({ remote }),
     } as any, ShellPolicyCard as any),
-  ), 'dsh-windows-shell-policy: settings card')
+  ), 'dsh-windows-shell-policy: legacy settings card')
 }
