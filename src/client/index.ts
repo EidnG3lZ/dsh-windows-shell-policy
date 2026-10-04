@@ -1,14 +1,12 @@
 /**
- * dsh-windows-shell-policy — client 配置卡片（settings.plugin.item slot）。
+ * dsh-windows-shell-policy — client 配置页（plugins.bundle.config）。
  *
- * 在「设置 - 插件 - 插件配置」面板注册「默认 Shell」卡片，折叠式
- * （与官方「终端 / Agent 循环 / 网页搜索」卡片同构）：头部按钮命名插件
- * 并描述其配置，点击展开控件；折叠时保留 staged 编辑并在头部标记
- * 「未保存」。控件：自动 / bash / pwsh 三选一 + 显式 bash 路径输入框。
- * 读写走 host 插件自己的 API（/dsh-shell-policy/api/status、/preferred、
- * /bashpath）——settings 的 client 端 RPC 有 apiproxy allowlist 限制，
- * 本插件 namespace 不在其中，故不依赖 settingsScope；host 端仍经
- * settings 服务持久化。监听 settings/document-updated 事件实时刷新状态。
+ * 在插件管理页的本插件详情页注册「Shell 工具」配置面板：可增删的 shell 条目列表，
+ * 每条含启用开关、工具名、可执行文件路径（可探测）、工具提示词、沙箱完全权限与
+ * 「默认」标记；面板实时显示每个条目的探测/注册状态。读写走 host 插件自己的 API
+ * （/dsh-shell-policy/api/status、/shells、/detect）——settings 的 client 端 RPC 有
+ * apiproxy allowlist 限制，本插件 namespace 不在其中，故不依赖 settingsScope；
+ * host 端仍经 settings 服务持久化。监听 settings/document-updated 事件实时刷新。
  *
  * 构建：npm run build:client（tsdown，产物 lib/client.js，ModuleLoader.load 注册）。
  * 必坑（2026-08 实测）：① apply 用 ctx.slots 必须 export const inject
@@ -27,16 +25,43 @@ type ClientContext = {
 
 export const inject = ['slots', 'remote']
 
+/** 条目数量上限（与 host 保持一致）。 */
+const MAX_ENTRIES = 16
+
+/** host /status 返回的单个条目。 */
+interface EntryStatus {
+  id: string
+  name: string
+  enabled: boolean
+  path: string
+  description: string
+  fullAccess: boolean
+  primary: boolean
+  resolvedPath: string
+  registered: boolean
+  error?: string
+}
+
 /** host 状态 API 返回。 */
 interface Status {
   platform: string
   supported: boolean
-  bashFound: boolean
-  bashPath: string
-  effective: 'bash' | 'pwsh'
-  preferred: 'auto' | 'bash' | 'pwsh'
-  configuredBashPath: string
+  entries: EntryStatus[]
+  migrated: boolean
+  registered: string[]
   registerError?: string
+}
+
+/** 面板中的条目（草稿；notice 仅 UI 使用）。 */
+interface DraftEntry {
+  id: string
+  name: string
+  enabled: boolean
+  path: string
+  description: string
+  fullAccess: boolean
+  primary: boolean
+  notice?: string
 }
 
 // ── 样式：与官方 PluginCard.module.css 同构（内联，CSS 变量一致）──────────
@@ -157,8 +182,7 @@ const statusStyle: Record<string, string> = {
   fontSize: '12px',
   lineHeight: '1.5',
   color: 'var(--dsw-alias-label-tertiary)',
-  fontFamily: 'monospace',
-  wordBreak: 'break-all',
+  wordBreak: 'break-word',
 }
 
 const errorStatusStyle: Record<string, string> = {
@@ -166,39 +190,49 @@ const errorStatusStyle: Record<string, string> = {
   fontSize: '12px',
   lineHeight: '1.5',
   color: 'var(--dsw-alias-label-error)',
-  wordBreak: 'break-all',
+  wordBreak: 'break-word',
 }
 
-const optionStyle: Record<string, string> = {
+/** 单个条目卡片。 */
+const entryStyle: Record<string, string> = {
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2)',
+  borderRadius: '10px',
+  background: 'var(--dsw-alias-bg-layer-2)',
+  padding: '10px 12px',
+  margin: '10px 0',
   display: 'flex',
-  alignItems: 'baseline',
+  flexDirection: 'column',
   gap: '8px',
-  padding: '4px 0',
-  cursor: 'pointer',
+}
+
+const entryHeadStyle: Record<string, string> = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+  flexWrap: 'wrap',
+}
+
+const switchLabelStyle: Record<string, string> = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
   fontSize: '13px',
   color: 'var(--dsw-alias-label-primary)',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
 }
 
-const optionLabelStyle: Record<string, string> = {
-  fontWeight: 600,
-  minWidth: '48px',
-}
-
-const optionHintStyle: Record<string, string> = {
-  color: 'var(--dsw-alias-label-tertiary)',
-  fontSize: '12px',
-}
-
-const fieldStyle: Record<string, string> = {
-  margin: '8px 0 4px',
+const fieldRowStyle: Record<string, string> = {
   display: 'flex',
   flexDirection: 'column',
   gap: '4px',
 }
 
 const fieldLabelStyle: Record<string, string> = {
-  fontSize: '13px',
-  color: 'var(--dsw-alias-label-primary)',
+  fontSize: '12px',
+  color: 'var(--dsw-alias-label-secondary)',
 }
 
 const fieldHintStyle: Record<string, string> = {
@@ -219,6 +253,14 @@ const inputStyle: Record<string, string> = {
   background: 'var(--dsw-alias-bg-layer-3)',
   width: '100%',
   boxSizing: 'border-box',
+}
+
+const textareaStyle: Record<string, string> = {
+  ...inputStyle,
+  resize: 'vertical',
+  minHeight: '56px',
+  fontFamily: 'inherit',
+  lineHeight: '1.5',
 }
 
 const footerStyle: Record<string, string> = {
@@ -267,9 +309,74 @@ const saveStyle: Record<string, string> = {
   color: 'var(--dsw-alias-bg-layer-3)',
 }
 
+const ghostStyle: Record<string, string> = {
+  ...buttonBase,
+  borderColor: 'var(--dsw-alias-border-l2)',
+  background: 'none',
+  color: 'var(--dsw-alias-label-secondary)',
+  padding: '4px 10px',
+  fontSize: '12px',
+}
+
+const addStyle: Record<string, string> = {
+  ...buttonBase,
+  borderColor: 'var(--dsw-alias-border-l2)',
+  background: 'none',
+  color: 'var(--dsw-alias-label-primary)',
+}
+
 const disabledStyle: Record<string, string> = {
   opacity: '0.4',
   cursor: 'default',
+}
+
+/** 与 host 一致的默认工具名推导（pwsh 让位给内置工具，改名为 powershell）。 */
+function deriveName(path: string): string {
+  const base = path.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat|sh)$/i, '')
+  const cleaned = base
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, '_')
+    .replace(/^[_.-]+|[_.-]+$/g, '')
+    .slice(0, 64)
+  if (cleaned === 'pwsh') return 'powershell'
+  return cleaned
+}
+
+/** 条目的生效工具名（空名称时由路径推导，与 host 行为一致）。 */
+function effectiveName(entry: DraftEntry): string {
+  const explicit = entry.name
+    .trim()
+    .replace(/[^A-Za-z0-9_.-]+/g, '_')
+    .replace(/^[_.-]+|[_.-]+$/g, '')
+  if (explicit.length > 0) return explicit
+  const derived = deriveName(entry.path.trim())
+  return derived.length > 0 ? derived : 'shell'
+}
+
+/** 条目的保存前问题（undefined 表示可保存）。 */
+function entryProblem(entry: DraftEntry, all: readonly DraftEntry[]): string | undefined {
+  if (!entry.enabled) return undefined
+  const name = effectiveName(entry)
+  if (name === 'run_code') return '工具名 run_code 是 DSH 保留名'
+  if (all.some((other) => other !== entry && other.enabled && effectiveName(other) === name)) {
+    return `工具名 "${name}" 与其它启用条目重复`
+  }
+  const path = entry.path.trim()
+  if (path.length > 0 && !/^[A-Za-z]:[\\/]|^\//.test(path)) return '路径必须是绝对路径'
+  return undefined
+}
+
+/** 从 /status 视图取面板草稿（丢弃运行时字段）。 */
+function toDraft(entry: EntryStatus): DraftEntry {
+  return {
+    id: entry.id,
+    name: entry.name,
+    enabled: entry.enabled,
+    path: entry.path,
+    description: entry.description,
+    fullAccess: entry.fullAccess,
+    primary: entry.primary,
+  }
 }
 
 /**
@@ -282,10 +389,9 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
   const { view, remote } = props
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<Status | null>(null)
-  const [draft, setDraft] = useState<string | null>(null)
-  const [draftBashPath, setDraftBashPath] = useState<string | null>(null)
+  const [draft, setDraft] = useState<DraftEntry[] | null>(null)
   const [saving, setSaving] = useState(false)
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState<string | null>(null)
 
   const load = (): void => {
     fetch('/dsh-shell-policy/api/status')
@@ -301,109 +407,224 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
     return off
   }, [remote])
 
-  const current = status?.preferred ?? 'auto'
-  const currentBashPath = status?.configuredBashPath ?? ''
-  const staged = draft ?? current
-  const stagedBashPath = draftBashPath ?? currentBashPath
-  const dirty = (draft !== null && draft !== current) || (draftBashPath !== null && draftBashPath !== currentBashPath)
-  const blocked = !dirty || saving
+  const saved = (status?.entries ?? []).map(toDraft)
+  const entries = draft ?? saved
+  const dirty = draft !== null
+  const problems = entries.map((entry) => entryProblem(entry, entries))
+  const hasProblem = problems.some((problem) => problem !== undefined)
+  const blocked = !dirty || saving || hasProblem
+
+  const update = (index: number, patch: Partial<DraftEntry>): void => {
+    setDraft(entries.map((entry, i) => i === index ? { ...entry, ...patch } : entry))
+  }
+
+  const setPrimary = (index: number): void => {
+    setDraft(entries.map((entry, i) => ({ ...entry, primary: i === index })))
+  }
+
+  const addEntry = (): void => {
+    if (entries.length >= MAX_ENTRIES) return
+    const entry: DraftEntry = {
+      id: `entry-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      name: '',
+      enabled: true,
+      path: '',
+      description: '',
+      fullAccess: false,
+      primary: entries.length === 0,
+    }
+    setDraft([...entries, entry])
+    void probe(entries.length, entry)
+  }
+
+  const removeEntry = (index: number): void => {
+    setDraft(entries.filter((_, i) => i !== index))
+  }
+
+  const probe = async (index: number, entry: DraftEntry): Promise<void> => {
+    try {
+      const response = await fetch('/dsh-shell-policy/api/detect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: entry.name, path: entry.path }),
+      })
+      const result = await response.json() as { ok?: boolean; path?: string }
+      const found = result.ok === true && typeof result.path === 'string' && result.path.length > 0 ? result.path : ''
+      setDraft((current) => (current ?? entries).map((item, i) => {
+        if (i !== index) return item
+        return found.length > 0
+          ? { ...item, path: found, name: item.name.length > 0 ? item.name : deriveName(found), notice: undefined }
+          : { ...item, notice: '未探测到可执行文件，请手动填写路径' }
+      }))
+    } catch {
+      setDraft((current) => (current ?? entries).map((item, i) => i === index ? { ...item, notice: '探测请求失败' } : item))
+    }
+  }
 
   const save = (): void => {
-    if (!dirty || saving) return
+    if (blocked) return
     setSaving(true)
-    setFailed(false)
-    const writes: Promise<unknown>[] = []
-    if (draft !== null && draft !== current) {
-      writes.push(fetch('/dsh-shell-policy/api/preferred', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ preferred: draft }),
-      }).then((r) => r.json()).then((result) => {
-        if (result.ok !== true) throw new Error(String(result.error ?? 'preferred write failed'))
-      }))
-    }
-    if (draftBashPath !== null && draftBashPath !== currentBashPath) {
-      writes.push(fetch('/dsh-shell-policy/api/bashpath', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ bashPath: draftBashPath }),
-      }).then((r) => r.json()).then((result) => {
-        if (result.ok !== true) throw new Error(String(result.error ?? 'bashPath write failed'))
-      }))
-    }
-    Promise.all(writes)
-      .then(() => {
+    setFailed(null)
+    fetch('/dsh-shell-policy/api/shells', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        shells: entries.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          enabled: entry.enabled,
+          path: entry.path,
+          description: entry.description,
+          fullAccess: entry.fullAccess,
+          primary: entry.primary,
+        })),
+      }),
+    })
+      .then((r) => r.json())
+      .then((result) => {
+        if ((result as { ok?: unknown }).ok !== true) throw new Error(String((result as { error?: unknown }).error ?? '保存失败'))
         setDraft(null)
-        setDraftBashPath(null)
         load()
       })
-      .catch(() => setFailed(true))
+      .catch((error: unknown) => setFailed(String(error)))
       .finally(() => setSaving(false))
   }
 
   const discard = (): void => {
     setDraft(null)
-    setDraftBashPath(null)
-    setFailed(false)
+    setFailed(null)
   }
 
-  const options = [
-    { value: 'auto', label: '自动', hint: '探测到 git-bash 则用 bash，否则 pwsh' },
-    { value: 'bash', label: 'bash', hint: '强制 git-bash' },
-    { value: 'pwsh', label: 'pwsh', hint: '强制 PowerShell' },
-  ]
-
+  const registered = status?.registered ?? []
   const statusLine = status === null
     ? '状态加载中...'
     : !status.supported
       ? `当前平台 ${status.platform} 不受支持：DSH 默认 bash 工具已可用，本插件仅 Windows 生效`
-      : status.effective === 'bash'
-        ? `当前生效：bash（${status.bashPath}）`
-        : status.bashFound
-          ? '当前生效：pwsh（bash 可用但未启用）'
-          : '当前生效：pwsh（未探测到 bash）'
+      : registered.length === 0
+        ? '当前没有注册任何 shell 工具（DSH 内置 shell 工具仍然可用）'
+        : `已注册：${registered.join('、')}`
 
-  const registerErrorLine = status?.registerError !== undefined && status.registerError.length > 0
-    ? `bash 工具注册失败：${status.registerError}`
-    : null
+  const errorLine = status?.registerError !== undefined && status.registerError.length > 0 ? status.registerError : null
 
-  // 配置面板内容（page 与折叠卡片的展开体共用）。
+  const entryCard = (entry: DraftEntry, index: number): ReturnType<typeof createElement> => {
+    const runtime = status?.entries.find((item) => item.id === entry.id)
+    const notice = entry.notice !== undefined
+      ? createElement('div', { key: 'notice', style: fieldHintStyle }, entry.notice)
+      : null
+    const problem = problems[index] !== undefined
+      ? createElement('div', { key: 'problem', style: { ...fieldHintStyle, color: 'var(--dsw-alias-label-error)' } }, problems[index])
+      : null
+    const runtimeLine = !dirty && runtime !== undefined && entry.enabled
+      ? createElement('div', {
+        key: 'runtime',
+        style: runtime.error !== undefined ? { ...fieldHintStyle, color: 'var(--dsw-alias-label-error)' } : fieldHintStyle,
+      }, runtime.error !== undefined
+        ? `运行时未生效：${runtime.error}`
+        : runtime.registered
+          ? `运行时已生效：${runtime.resolvedPath}`
+          : '运行时未生效：未找到可执行文件')
+      : null
+    return createElement('div', { key: entry.id, style: entryStyle },
+      createElement('div', { key: 'head', style: entryHeadStyle },
+        createElement('label', { key: 'enabled', style: switchLabelStyle },
+          createElement('input', {
+            type: 'checkbox',
+            checked: entry.enabled,
+            disabled: saving,
+            onChange: (event: { target: { checked: boolean } }) => update(index, { enabled: event.target.checked }),
+          }),
+          createElement('span', null, '启用'),
+        ),
+        createElement('input', {
+          key: 'name',
+          type: 'text',
+          style: { ...inputStyle, width: '150px' },
+          value: entry.name,
+          placeholder: '工具名',
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) => update(index, { name: event.target.value }),
+        }),
+        createElement('label', { key: 'primary', style: switchLabelStyle, title: '多个 shell 启用时，引导提示词优先推荐它' },
+          createElement('input', {
+            type: 'radio',
+            name: 'shell-policy-primary',
+            checked: entry.primary,
+            disabled: saving || !entry.enabled,
+            onChange: () => setPrimary(index),
+          }),
+          createElement('span', null, '默认'),
+        ),
+        createElement('span', { key: 'spacer', style: { flex: '1' } }),
+        createElement('button', { key: 'probe', type: 'button', style: ghostStyle, disabled: saving, onClick: () => { void probe(index, entry) } }, '探测'),
+        createElement('button', { key: 'remove', type: 'button', style: ghostStyle, disabled: saving || entries.length <= 1, onClick: () => removeEntry(index) }, '删除'),
+      ),
+      createElement('div', { key: 'path', style: fieldRowStyle },
+        createElement('span', { style: fieldLabelStyle }, '可执行文件路径'),
+        createElement('input', {
+          type: 'text',
+          style: inputStyle,
+          value: entry.path,
+          placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PowerShell / PATH）',
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) => update(index, { path: event.target.value }),
+        }),
+      ),
+      createElement('div', { key: 'description', style: fieldRowStyle },
+        createElement('span', { style: fieldLabelStyle }, '工具提示词'),
+        createElement('textarea', {
+          style: textareaStyle,
+          value: entry.description,
+          rows: 3,
+          placeholder: '留空使用默认说明（含 fresh shell、workdir、exit code 约定）',
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) => update(index, { description: event.target.value }),
+        }),
+      ),
+      createElement('label', { key: 'fullAccess', style: switchLabelStyle },
+        createElement('input', {
+          type: 'checkbox',
+          checked: entry.fullAccess,
+          disabled: saving,
+          onChange: (event: { target: { checked: boolean } }) => update(index, { fullAccess: event.target.checked }),
+        }),
+        createElement('span', null, '沙箱完全权限（跳过文件沙箱，执行不再逐次审批）'),
+      ),
+      runtimeLine,
+      notice,
+      problem,
+    )
+  }
+
   const controls = [
-    registerErrorLine !== null
-      ? createElement('div', { key: 'status', style: errorStatusStyle }, registerErrorLine)
-      : createElement('div', { key: 'status', style: statusStyle }, statusLine),
-    ...options.map((opt) => createElement('label', { key: opt.value, style: optionStyle },
-      createElement('input', {
-        type: 'radio',
-        name: 'shell-policy-preferred',
-        checked: staged === opt.value,
-        disabled: saving,
-        onChange: () => setDraft(opt.value),
-      }),
-      createElement('span', { style: optionLabelStyle }, opt.label),
-      createElement('span', { style: optionHintStyle }, opt.hint),
-    )),
-    createElement('div', { key: 'bashpath', style: fieldStyle },
-      createElement('span', { style: fieldLabelStyle }, 'bash 可执行文件路径'),
-      createElement('input', {
-        type: 'text',
-        style: inputStyle,
-        value: stagedBashPath,
-        placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PATH）',
-        disabled: saving,
-        onChange: (event: { target: { value: string } }) => setDraftBashPath(event.target.value),
-      }),
-      createElement('span', { style: fieldHintStyle }, '显式指定 bash.exe 路径；留空则自动探测。'),
-    ),
+    errorLine !== null
+      ? createElement('div', { key: 'status', style: errorStatusStyle }, errorLine)
+      : createElement('div', { key: 'status', style: statusStyle },
+        statusLine,
+        status?.migrated === true ? createElement('span', null, '（当前条目由旧配置迁移，保存后写入配置）') : null,
+      ),
+    ...entries.map(entryCard),
+    entries.length === 0
+      ? createElement('div', { key: 'empty', style: statusStyle }, '还没有条目。点击「添加 shell」新增一个（例如 git-bash 或 PowerShell）。')
+      : null,
     createElement('div', { key: 'footer', style: footerStyle },
-      failed ? createElement('p', { style: failedStyle, role: 'status' }, '保存失败，请重试') : null,
+      failed !== null ? createElement('p', { style: failedStyle, role: 'status' }, `保存失败：${failed}`) : null,
+      createElement('span', { key: 'spacer', style: { flex: '1' } }),
       createElement('button', {
+        key: 'add',
+        type: 'button',
+        style: { ...addStyle, ...(saving || entries.length >= MAX_ENTRIES ? disabledStyle : {}) },
+        disabled: saving || entries.length >= MAX_ENTRIES,
+        onClick: addEntry,
+      }, '添加 shell'),
+      createElement('button', {
+        key: 'discard',
         type: 'button',
         style: { ...discardStyle, ...(!dirty || saving ? disabledStyle : {}) },
         disabled: !dirty || saving,
         onClick: discard,
       }, '放弃'),
       createElement('button', {
+        key: 'save',
         type: 'button',
         style: { ...saveStyle, ...(blocked ? disabledStyle : {}) },
         disabled: blocked,
@@ -414,7 +635,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
 
   // summary：官方卡片/行的一行摘要。
   if (view === 'summary') {
-    return createElement('span', null, registerErrorLine ?? statusLine)
+    return createElement('span', null, errorLine ?? statusLine)
   }
 
   // page：DSH 0.2.0 的 bundle 配置页（插件详情页内，无折叠）。
@@ -428,12 +649,12 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
       type: 'button',
       style: headerStyle,
       'aria-expanded': open,
-      'aria-label': `${open ? '收起设置' : '展开设置'}: 默认 Shell`,
+      'aria-label': `${open ? '收起设置' : '展开设置'}: Shell 工具`,
       onClick: () => setOpen(!open),
     },
       createElement('span', { style: headTextStyle },
-        createElement('span', { style: nameStyle }, '默认 Shell'),
-        createElement('span', { style: descriptionStyle }, '选择 agent 使用的 shell 工具。切换后下一次请求生效。'),
+        createElement('span', { style: nameStyle }, 'Shell 工具'),
+        createElement('span', { style: descriptionStyle }, '配置 agent 可用的 shell 工具：启用/停用、路径、工具提示词与沙箱权限。切换后下一次请求生效。'),
       ),
       dirty ? createElement('span', { style: pendingStyle }, '未保存') : null,
       createElement('span', { style: { ...chevronStyle, ...(open ? chevronOpenStyle : {}) } },
@@ -452,7 +673,7 @@ export function apply(ctx: ClientContext): void {
     ctx.slots.register({
       name: 'plugins.bundle.config',
       key: 'dsh-windows-shell-policy',
-      label: () => '默认 Shell',
+      label: () => 'Shell 工具',
       inject: () => ({ remote }),
     } as any, ShellPolicyCard as any),
   ), 'dsh-windows-shell-policy: bundle config page')
@@ -465,7 +686,7 @@ export function apply(ctx: ClientContext): void {
       id: 'shell-policy',
       key: 'shell-policy',
       order: 5,
-      label: () => '默认 Shell',
+      label: () => 'Shell 工具',
       inject: () => ({ remote }),
     } as any, ShellPolicyCard as any),
   ), 'dsh-windows-shell-policy: legacy settings card')

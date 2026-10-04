@@ -1,7 +1,7 @@
 {
   "name": "dsh-windows-shell-policy",
-  "version": "0.0.7",
-  "description": "DSH Windows default shell policy plugin: probe git-bash/MSYS2, switch bash/pwsh from the plugin config card, register the bash tool and trim the prompt tool surface. DSH Windows 默认 Shell 策略插件：探测 git-bash，配置面板切换 bash/pwsh，动态注册 bash 工具并裁剪提示词工具面",
+  "version": "0.1.0",
+  "description": "DSH Windows shell policy plugin: manage multiple shell tools (git-bash / MSYS2 / Cygwin / PowerShell) as add-and-remove entries with an enable switch, auto-detected path, tool prompt and full-sandbox permission. DSH Windows Shell 策略插件：以可增删条目管理多个 shell 工具（启用开关 / 路径自动探测 / 工具提示词 / 沙箱完全权限）并动态注册对应工具",
   "type": "module",
   "main": "./lib/index.js",
   "types": "./lib/types/index.d.ts",
@@ -19,7 +19,8 @@
     "bash",
     "git-bash",
     "windows",
-    "pwsh"
+    "pwsh",
+    "powershell"
   ],
   "repository": {
     "type": "git",
@@ -48,7 +49,8 @@
   },
   "scripts": {
     "build": "bash scripts/build.sh",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:host": "node tests/host-harness.mjs"
   },
   "exports": {
     ".": {

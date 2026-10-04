@@ -2,6 +2,25 @@
 
 本项目的所有重要变更记录于此。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.1.0] - 2026-10-04
+
+### 破坏性变更
+
+- **配置模型从「单 shell 三选一」改为「shell 条目数组」**：`preferred`（auto / bash / pwsh）与 `bashPath` 被 `shells: ShellEntry[]` 取代，条目字段为 `{ id, name, enabled, path, description, fullAccess, primary }`。
+  - 旧配置自动迁移：`shells` 为空时按旧字段生成等价条目（`preferred=pwsh` → 未启用的 `powershell` 条目；其它情况 → 启用的 `bash` 条目，路径取旧 `bashPath`），首次保存时落盘；旧字段保留但不再生效。
+  - 配置面板从「默认 Shell」三选一改为条目列表：可增删、每条目独立启用 / 路径 / 工具提示词 / 沙箱完全权限，并新增「默认」单选。
+
+### 新增
+
+- **多 shell 条目**：每个启用且可用的条目注册为一个独立 shell 工具（工具名默认由可执行文件名推导，非法字符换成 `_`；`pwsh` 因与 DSH 内置工具重名默认改叫 `powershell`；启用条目间必须唯一，`run_code` 为保留名），支持同时启用多个 shell。
+- **家族方言**：PowerShell 家族用 `-NoLogo -NoProfile -NonInteractive -Command`（命令前附 UTF-8 输出编码前缀，修正 Windows PowerShell 5.1 代码页），其余 shell 用 `-c`。
+- **路径探测扩展**：Git for Windows（`bin` / `usr\bin` / 用户级 `%LOCALAPPDATA%\Programs\Git`）、MSYS2、Cygwin、PowerShell 7、Windows PowerShell 5.1、PATH（按条目名与 `bash.exe` 查 `.exe`）。新增 `POST /shells`、`POST /detect` API 与面板「探测」按钮。
+- **沙箱完全权限（条目级 `fullAccess`）**：跳过 `sandbox.confine`（等同 `danger-full-access`，因此不再触发沙箱拒绝后的升级审批），且该工具不向模型暴露 `sandbox_permissions`/`justification`（硬塞这两个参数会报错）。
+- **条目级运行时状态与错误隔离**：未找到可执行文件、工具名被 DSH 内置工具或其它插件占用、启用条目间重名、注册抛错都只影响该条目并在面板显示原因；`/status` 新增 `entries`、`migrated`、`registered`，原 `registerError` 汇总全部条目问题（旧客户端字段 `effective`/`bashFound`/`bashPath`/`preferred`/`configuredBashPath` 继续返回）。
+- **动态引导提示词**：`systemPrompt.section('shell-policy', order 104)` 改为函数文本，列出已注册的 shell 工具并推荐 `primary` 条目；没有注册任何工具时文本为空。
+- **提示词裁剪规则更新**：只要有条目注册成功，就隐藏 DSH 内置的 `bash`/`pwsh`（内置工具在运行时无法注销，只能靠 `system-prompt/assemble` 过滤）；全部条目停用 / 不可用时不再裁剪，回到 DSH 原始工具面。
+- **本地集成测试**：`tests/host-harness.mjs`（假 ctx，45 项断言，覆盖 schema 默认值、旧配置迁移、多工具注册、真实 spawn git-bash/pwsh 执行、渲染与终端卡片拆分、assemble 裁剪、引导文本、`/status` `/shells` `/detect` API、fullAccess 不 confine 且隐藏升级参数、PowerShell 方言、名称冲突、全部停用、后台任务通道（JobOutcome / readOutput / generic 卡片）、registry 级 output schema 与参数校验、真实 settings 服务的 volatile 契约），运行 `node tests/host-harness.mjs`。
+
 ## [0.0.7] - 2026-10-01
 
 ### 变更
