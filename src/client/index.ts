@@ -1,9 +1,11 @@
 /**
  * dsh-windows-shell-policy — client 配置页（plugins.bundle.config）。
  *
- * 在插件管理页的本插件详情页注册「Shell 工具」配置面板：可增删的 shell 条目列表，
- * 每条含启用开关、工具名、可执行文件路径（可探测）、工具提示词、沙箱完全权限与
- * 「默认」标记；面板实时显示每个条目的探测/注册状态。读写走 host 插件自己的 API
+ * 在插件管理页的本插件详情页注册「Shell 工具」配置面板：可增删的 shell 条目列表。
+ * 列表里的条目是**折叠态**——只显示名称（只读）、启用开关与「默认」单选，避免长条目
+ * 撑满屏幕；名称、可执行文件路径（可探测）、工具提示词、沙箱完全权限与删除都收进
+ * 该条目单独的「配置」界面（点行尾「配置」进入，点「返回列表」退出）。
+ * 读写走 host 插件自己的 API
  * （/dsh-shell-policy/api/status、/shells、/detect）——settings 的 client 端 RPC 有
  * apiproxy allowlist 限制，本插件 namespace 不在其中，故不依赖 settingsScope；
  * host 端仍经 settings 服务持久化。监听 settings/document-updated 事件实时刷新。
@@ -330,6 +332,98 @@ const disabledStyle: Record<string, string> = {
   cursor: 'default',
 }
 
+/** 折叠态条目行：只放名称、启用与默认，其余设置进「配置」界面。 */
+const rowStyle: Record<string, string> = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '10px',
+  flexWrap: 'wrap',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-border-l2)',
+  borderRadius: '10px',
+  background: 'var(--dsw-alias-bg-layer-2)',
+  padding: '8px 12px',
+  margin: '8px 0',
+}
+
+/** 行内条目名（只读展示）。 */
+const rowNameStyle: Record<string, string> = {
+  flex: '1',
+  minWidth: '0',
+  fontSize: '14px',
+  fontWeight: 500,
+  lineHeight: '1.4',
+  color: 'var(--dsw-alias-label-primary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+/** 名称由路径推导时的弱化样式。 */
+const rowNameDerivedStyle: Record<string, string> = {
+  ...rowNameStyle,
+  fontWeight: 400,
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
+/** 折叠行上的问题标记（悬停显示原因，不占额外行高）。 */
+const warnBadgeStyle: Record<string, string> = {
+  flex: 'none',
+  display: 'inline-block',
+  width: '16px',
+  height: '16px',
+  borderRadius: '50%',
+  textAlign: 'center',
+  fontSize: '11px',
+  lineHeight: '14px',
+  fontWeight: 600,
+  color: 'var(--dsw-alias-label-error)',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'var(--dsw-alias-label-error)',
+  cursor: 'help',
+}
+
+/** 「配置」界面头部：返回 / 标题 / 删除。 */
+const detailHeadStyle: Record<string, string> = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+}
+
+const detailTitleStyle: Record<string, string> = {
+  flex: '1',
+  minWidth: '0',
+  fontSize: '14px',
+  fontWeight: 600,
+  lineHeight: '1.4',
+  color: 'var(--dsw-alias-label-primary)',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+/** 路径输入 + 探测按钮的一行。 */
+const inlineRowStyle: Record<string, string> = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '8px',
+}
+
+const pathInputStyle: Record<string, string> = {
+  ...inputStyle,
+  flex: '1',
+  width: 'auto',
+  minWidth: '0',
+}
+
+/** 长文案的开关标签（允许换行，避免撑宽）。 */
+const wrapLabelStyle: Record<string, string> = {
+  ...switchLabelStyle,
+  whiteSpace: 'normal',
+}
+
 /** 与 host 一致的默认工具名推导（pwsh 让位给内置工具，改名为 powershell）。 */
 function deriveName(path: string): string {
   const base = path.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat|sh)$/i, '')
@@ -392,6 +486,8 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
   const [draft, setDraft] = useState<DraftEntry[] | null>(null)
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState<string | null>(null)
+  // 正在「配置」界面里编辑的条目 id；null 表示条目列表视图。
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   const load = (): void => {
     fetch('/dsh-shell-policy/api/status')
@@ -434,11 +530,13 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
       primary: entries.length === 0,
     }
     setDraft([...entries, entry])
+    setEditingId(entry.id)
     void probe(entries.length, entry)
   }
 
   const removeEntry = (index: number): void => {
     setDraft(entries.filter((_, i) => i !== index))
+    setEditingId(null)
   }
 
   const probe = async (index: number, entry: DraftEntry): Promise<void> => {
@@ -484,6 +582,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
       .then((result) => {
         if ((result as { ok?: unknown }).ok !== true) throw new Error(String((result as { error?: unknown }).error ?? '保存失败'))
         setDraft(null)
+        setEditingId(null)
         load()
       })
       .catch((error: unknown) => setFailed(String(error)))
@@ -492,6 +591,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
 
   const discard = (): void => {
     setDraft(null)
+    setEditingId(null)
     setFailed(null)
   }
 
@@ -506,7 +606,71 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
 
   const errorLine = status?.registerError !== undefined && status.registerError.length > 0 ? status.registerError : null
 
-  const entryCard = (entry: DraftEntry, index: number): ReturnType<typeof createElement> => {
+  /** 列表行显示的条目名：工具名留空时由可执行文件名推导。 */
+  const displayName = (entry: DraftEntry): string => {
+    const explicit = entry.name.trim()
+    if (explicit.length > 0) return explicit
+    const derived = deriveName(entry.path.trim())
+    return derived.length > 0 ? derived : '未命名'
+  }
+
+  /** 折叠行上的问题提示（悬停可见）：客户端校验优先，其次是运行时状态。 */
+  const entryWarning = (entry: DraftEntry, index: number): string | undefined => {
+    const problem = problems[index]
+    if (problem !== undefined) return problem
+    if (dirty || !entry.enabled) return undefined
+    const runtime = status?.entries.find((item) => item.id === entry.id)
+    if (runtime === undefined) return undefined
+    if (runtime.error !== undefined) return runtime.error
+    if (!runtime.registered) return '运行时未生效：未找到可执行文件'
+    return undefined
+  }
+
+  /** 折叠态条目行：只显示名称、启用、默认，以及进入「配置」界面的入口。 */
+  const entryRow = (entry: DraftEntry, index: number): ReturnType<typeof createElement> => {
+    const warning = entryWarning(entry, index)
+    const explicitName = entry.name.trim().length > 0
+    return createElement('div', { key: entry.id, style: rowStyle },
+      createElement('span', {
+        key: 'name',
+        style: explicitName ? rowNameStyle : rowNameDerivedStyle,
+        title: explicitName ? entry.name : '名称由可执行文件路径推导，点「配置」可修改',
+      }, displayName(entry)),
+      warning !== undefined
+        ? createElement('span', { key: 'warning', style: warnBadgeStyle, title: warning }, '!')
+        : null,
+      createElement('label', { key: 'enabled', style: switchLabelStyle },
+        createElement('input', {
+          type: 'checkbox',
+          checked: entry.enabled,
+          disabled: saving,
+          onChange: (event: { target: { checked: boolean } }) => update(index, { enabled: event.target.checked }),
+        }),
+        createElement('span', null, '启用'),
+      ),
+      createElement('label', { key: 'primary', style: switchLabelStyle, title: '多个 shell 启用时，引导提示词优先推荐它' },
+        createElement('input', {
+          type: 'radio',
+          name: 'shell-policy-primary',
+          checked: entry.primary,
+          disabled: saving || !entry.enabled,
+          onChange: () => setPrimary(index),
+        }),
+        createElement('span', null, '默认'),
+      ),
+      createElement('button', {
+        key: 'config',
+        type: 'button',
+        style: ghostStyle,
+        disabled: saving,
+        title: '工具名、可执行文件路径、工具提示词、沙箱完全权限与删除',
+        onClick: () => setEditingId(entry.id),
+      }, '配置'),
+    )
+  }
+
+  /** 单个条目单独的配置界面：名称、路径（含探测）、提示词、沙箱权限与删除。 */
+  const entryDetail = (entry: DraftEntry, index: number): ReturnType<typeof createElement> => {
     const runtime = status?.entries.find((item) => item.id === entry.id)
     const notice = entry.notice !== undefined
       ? createElement('div', { key: 'notice', style: fieldHintStyle }, entry.notice)
@@ -525,49 +689,54 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
           : '运行时未生效：未找到可执行文件')
       : null
     return createElement('div', { key: entry.id, style: entryStyle },
-      createElement('div', { key: 'head', style: entryHeadStyle },
-        createElement('label', { key: 'enabled', style: switchLabelStyle },
-          createElement('input', {
-            type: 'checkbox',
-            checked: entry.enabled,
-            disabled: saving,
-            onChange: (event: { target: { checked: boolean } }) => update(index, { enabled: event.target.checked }),
-          }),
-          createElement('span', null, '启用'),
-        ),
-        createElement('input', {
-          key: 'name',
-          type: 'text',
-          style: { ...inputStyle, width: '150px' },
-          value: entry.name,
-          placeholder: '工具名',
+      createElement('div', { key: 'head', style: detailHeadStyle },
+        createElement('button', {
+          key: 'back',
+          type: 'button',
+          style: ghostStyle,
           disabled: saving,
-          onChange: (event: { target: { value: string } }) => update(index, { name: event.target.value }),
-        }),
-        createElement('label', { key: 'primary', style: switchLabelStyle, title: '多个 shell 启用时，引导提示词优先推荐它' },
-          createElement('input', {
-            type: 'radio',
-            name: 'shell-policy-primary',
-            checked: entry.primary,
-            disabled: saving || !entry.enabled,
-            onChange: () => setPrimary(index),
-          }),
-          createElement('span', null, '默认'),
-        ),
+          onClick: () => setEditingId(null),
+        }, '‹ 返回列表'),
+        createElement('span', { key: 'title', style: detailTitleStyle, title: displayName(entry) }, `配置：${displayName(entry)}`),
         createElement('span', { key: 'spacer', style: { flex: '1' } }),
-        createElement('button', { key: 'probe', type: 'button', style: ghostStyle, disabled: saving, onClick: () => { void probe(index, entry) } }, '探测'),
-        createElement('button', { key: 'remove', type: 'button', style: ghostStyle, disabled: saving || entries.length <= 1, onClick: () => removeEntry(index) }, '删除'),
+        createElement('button', {
+          key: 'remove',
+          type: 'button',
+          style: ghostStyle,
+          disabled: saving || entries.length <= 1,
+          onClick: () => removeEntry(index),
+        }, '删除'),
       ),
-      createElement('div', { key: 'path', style: fieldRowStyle },
-        createElement('span', { style: fieldLabelStyle }, '可执行文件路径'),
+      createElement('div', { key: 'name', style: fieldRowStyle },
+        createElement('span', { style: fieldLabelStyle }, '工具名'),
         createElement('input', {
           type: 'text',
           style: inputStyle,
-          value: entry.path,
-          placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PowerShell / PATH）',
+          value: entry.name,
+          placeholder: '留空按可执行文件名推导（pwsh 会改名为 powershell）',
           disabled: saving,
-          onChange: (event: { target: { value: string } }) => update(index, { path: event.target.value }),
+          onChange: (event: { target: { value: string } }) => update(index, { name: event.target.value }),
         }),
+        createElement('span', { style: fieldHintStyle }, `模型看到的工具名：${effectiveName(entry)}`),
+      ),
+      createElement('div', { key: 'path', style: fieldRowStyle },
+        createElement('span', { style: fieldLabelStyle }, '可执行文件路径'),
+        createElement('div', { style: inlineRowStyle },
+          createElement('input', {
+            type: 'text',
+            style: pathInputStyle,
+            value: entry.path,
+            placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PowerShell / PATH）',
+            disabled: saving,
+            onChange: (event: { target: { value: string } }) => update(index, { path: event.target.value }),
+          }),
+          createElement('button', {
+            type: 'button',
+            style: ghostStyle,
+            disabled: saving,
+            onClick: () => { void probe(index, entry) },
+          }, '探测'),
+        ),
       ),
       createElement('div', { key: 'description', style: fieldRowStyle },
         createElement('span', { style: fieldLabelStyle }, '工具提示词'),
@@ -580,7 +749,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
           onChange: (event: { target: { value: string } }) => update(index, { description: event.target.value }),
         }),
       ),
-      createElement('label', { key: 'fullAccess', style: switchLabelStyle },
+      createElement('label', { key: 'fullAccess', style: wrapLabelStyle },
         createElement('input', {
           type: 'checkbox',
           checked: entry.fullAccess,
@@ -595,6 +764,10 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
     )
   }
 
+  // 「配置」界面只在被点开的条目仍存在于当前条目表时生效；否则回落到列表。
+  const editingEntry = editingId === null ? null : (entries.find((item) => item.id === editingId) ?? null)
+  const editingIndex = editingEntry === null ? -1 : entries.indexOf(editingEntry)
+
   const controls = [
     errorLine !== null
       ? createElement('div', { key: 'status', style: errorStatusStyle }, errorLine)
@@ -602,7 +775,9 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
         statusLine,
         status?.migrated === true ? createElement('span', null, '（当前条目由旧配置迁移，保存后写入配置）') : null,
       ),
-    ...entries.map(entryCard),
+    ...(editingEntry !== null && editingIndex >= 0
+      ? [entryDetail(editingEntry, editingIndex)]
+      : entries.map(entryRow)),
     entries.length === 0
       ? createElement('div', { key: 'empty', style: statusStyle }, '还没有条目。点击「添加 shell」新增一个（例如 git-bash 或 PowerShell）。')
       : null,

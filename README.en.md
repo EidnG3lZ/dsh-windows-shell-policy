@@ -23,7 +23,7 @@ A **Windows multi-shell policy plugin** for DeepSeek Harness. DSH ships only Pow
 
 | Capability | Description |
 | --- | --- |
-| Multiple shell entries | Add/remove entries freely (up to 16); every enabled, usable entry registers as its own shell tool, and several can run at once |
+| Multiple shell entries | Add/remove entries freely (up to 16). Each entry is **collapsed into one row** in the list (name / enabled / default) and everything else lives in its own "Configure" view; every enabled, usable entry registers as its own shell tool, and several can run at once |
 | Auto probing | With an empty path, probe by family: Git for Windows (system / user / `usr\bin`), MSYS2, Cygwin, PowerShell 7, Windows PowerShell 5.1, PATH; each entry also has a Detect button |
 | Tool prompt | Per-entry model-facing tool description; empty falls back to the default template (fresh shell, `workdir`, exit-code conventions) |
 | Full sandbox access | Per-entry switch: skips the file-sandbox `confine` (equivalent to `danger-full-access`), so commands never prompt per call, and the tool no longer advertises `sandbox_permissions`/`justification` |
@@ -64,19 +64,22 @@ dev_inject_plugin <this dir>                   # host+UI take effect immediately
 
 ## Configuration Guide
 
-Open this plugin's detail page on the Plugins page; the "Shell tools" panel is the entry list:
+Open this plugin's detail page on the Plugins page; the "Shell tools" panel is the entry list. Every entry is **collapsed into a single row** showing only its name, Enabled and Default; press "Configure" at the end of the row to open that entry's **own configuration view**, and "‹ Back to list" to return:
 
-| Control | Behavior |
-| --- | --- |
-| Enabled | Switch; only enabled entries register as shell tools |
-| Tool name | The model-facing tool name. Empty derives it from the executable name (`pwsh.exe` becomes `powershell` because DSH's built-in tool already owns `pwsh`); it must be unique among enabled entries, and `run_code` is reserved |
-| Default | Radio; the guidance prompt recommends it when several shells are enabled |
-| Executable path | Empty auto-probes; the Detect button fills the first matching candidate for the current name/family |
-| Tool prompt | Model-facing tool description; empty uses the default template |
-| Full sandbox access | Skips the file-sandbox `confine` (equivalent to `danger-full-access`); commands never prompt per call |
-| Add shell / Remove | Add or remove entries (max 16, at least one kept) |
-| Save / Discard | Staged editing; client-side validation before saving (duplicates, `run_code`, absolute path) and one whole-list write |
+| Control | Where | Behavior |
+| --- | --- | --- |
+| Entry name | List | **Read-only** (derived from the executable name in a dimmed tone when the tool name is empty); rename it in the configuration view |
+| Enabled | List | Switch; only enabled entries register as shell tools |
+| Default | List | Radio; the guidance prompt recommends it when several shells are enabled |
+| Configure | List | Opens this entry's own configuration view (name, path, prompt, sandbox access, delete) |
+| Tool name | Config view | The model-facing tool name. Empty derives it from the executable name (`pwsh.exe` becomes `powershell` because DSH's built-in tool already owns `pwsh`); it must be unique among enabled entries, and `run_code` is reserved |
+| Executable path | Config view | Empty auto-probes; the Detect button fills the first matching candidate for the current name/family |
+| Tool prompt | Config view | Model-facing tool description; empty uses the default template |
+| Full sandbox access | Config view | Skips the file-sandbox `confine` (equivalent to `danger-full-access`); commands never prompt per call |
+| Add shell / Remove | List / config view | Add or remove entries (max 16, at least one kept); "Add shell" opens the new entry's configuration view right away, "Remove" lives in the configuration view |
+| Save / Discard | Both | Staged editing; client-side validation before saving (duplicates, `run_code`, absolute path) and one whole-list write; both return to the list |
 
+- A red `!` dot next to an entry name means that entry has a problem (hover for the reason); the configuration view shows the full reason and the runtime status.
 - Entries take effect on the next request after saving; the guidance text is snapshotted per session, so only a new session sees new text.
 - Configuration lives in this plugin's profile entry config (the `shells` array) and survives restarts; legacy `preferred` (auto/bash/pwsh) and `bashPath` are mapped to equivalent entries while `shells` is empty and persisted on first save.
 - Entries also skip `confine` when the file policy is already `danger-full-access`; this plugin is Windows-only — on Linux/macOS it registers no tools and trims nothing.

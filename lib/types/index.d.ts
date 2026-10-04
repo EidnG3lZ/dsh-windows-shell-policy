@@ -15,8 +15,8 @@
  * 6. 旧配置 preferred/bashPath 在 shells 为空时映射为等价条目（首次保存时落盘）。
  * 7. 非 Windows 平台只保留状态 API，不注册工具、不裁剪提示词。
  */
-import type { Context, Volatile } from 'cordis';
-import z from 'schemastery';
+import type { Context, Volatile } from '@deepseek-ai/cordis';
+import z from '@deepseek-ai/schemastery';
 declare module '@deepseek-ai/dsh-jobs' {
     interface JobKindMap {
         bash: 'bash';

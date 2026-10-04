@@ -92,6 +92,7 @@ function makeHarness(options = {}) {
     webServer: { register: (spec) => { harness.routes.push(spec); return () => {} } },
     loader: { entries: () => [{ options: { id: 'dsh-windows-shell-policy', name: 'dsh-windows-shell-policy' } }] },
   }
+  harness.emit = (event, ...args) => harness.listeners.get(event)?.(...args)
   return harness
 }
 
@@ -110,6 +111,15 @@ function wireServices(harness, overrides = {}) {
     },
   }
   return harness
+}
+
+/** 手工 volatile 包装：引用值可被测试改写，模拟 loader 在热更新时的原地 updateVolatile。 */
+function liveConfig(values) {
+  return {
+    shells: { get: () => values.shells ?? [] },
+    preferred: { get: () => values.preferred ?? 'auto' },
+    bashPath: { get: () => values.bashPath ?? '' },
+  }
 }
 
 /** 用 Config schema 解析（volatile 字段变成带 get() 的引用，与 DSH loader 一致）。 */
@@ -200,7 +210,7 @@ console.log('== fullAccess ==')
   const h = wireServices(makeHarness({ builtinTools: ['pwsh'] }))
   apply(h.ctx, pluginConfig({ shells: [bashEntry({ fullAccess: true })] }))
   const tool = h.tools.get('bash')
-  check('不暴露 sandbox_permissions', tool.parameters.sandbox_permissions === undefined)
+  check('不暴露 sandbox_permissions', tool.parameters.properties?.sandbox_permissions === undefined)
   const result = await tool.execute({ command: 'echo full', description: 'probe' }, { callId: 'c2', signal: signal() })
   check('fullAccess 不调用 confine', h.confineCalls.length === 0, String(h.confineCalls.length))
   check('fullAccess 仍可执行', result.stdout.text.includes('full'), JSON.stringify(result.stdout.text))
@@ -293,6 +303,35 @@ console.log('== 后台任务通道 ==')
   check('后台 readOutput 有输出', read.includes('bg-ok'), JSON.stringify(read))
   const view = tool.presentResult({ command: 'echo bg-ok', description: 'probe', run_in_background: true }, { content: [{ type: 'text', text: read }], isError: false })
   check('后台用 generic 卡片', view?.card === 'generic', JSON.stringify(view))
+}
+
+console.log('== volatile 热更新（面板保存路径）==')
+{
+  const h = wireServices(makeHarness({ builtinTools: ['pwsh'] }))
+  const values = { shells: [], preferred: 'auto', bashPath: '' }
+  apply(h.ctx, liveConfig(values))
+  const initial = h.tools.get('bash')
+  check('初始迁移注册 bash', initial !== undefined)
+  check('非 fullAccess 暴露升级参数', initial.parameters.properties?.sandbox_permissions !== undefined)
+
+  // 面板保存 = loader 原地更新 volatile 引用 + 发 loader/volatile-update，不重挂插件。
+  values.shells = [
+    { id: 'e1', name: 'bash', enabled: true, path: GITBASH, description: 'live-desc', fullAccess: true, primary: true },
+    { id: 'e2', name: 'powershell', enabled: false, path: '', description: '', fullAccess: false, primary: false },
+  ]
+  h.emit('loader/volatile-update')
+  const updated = h.tools.get('bash')
+  check('热更新后换成新条目', updated !== undefined && updated.description === 'live-desc', updated?.description)
+  check('热更新后 fullAccess 生效', updated.parameters.properties?.sandbox_permissions === undefined)
+  check('停用条目不注册', !h.tools.has('powershell'))
+  const status = await callApi(h.routes[0], '/dsh-shell-policy/api/status', 'GET')
+  check('/status 反映新配置', status.json.migrated === false && status.json.entries.length === 2 && status.json.entries[0].fullAccess === true, JSON.stringify(status.json.entries))
+  check('/status registered 列表', JSON.stringify(status.json.registered) === JSON.stringify(['bash']), JSON.stringify(status.json.registered))
+
+  // 完全不发事件：/status 自己也应对齐（兜底自愈）。
+  values.shells = [{ id: 'e3', name: 'bash', enabled: false, path: '', description: '', fullAccess: false, primary: true }]
+  const healed = await callApi(h.routes[0], '/dsh-shell-policy/api/status', 'GET')
+  check('未收到事件时 /status 自愈', healed.json.entries[0]?.enabled === false && !h.tools.has('bash'), JSON.stringify(healed.json.entries))
 }
 
 console.log('== settings 持久化契约 ==')

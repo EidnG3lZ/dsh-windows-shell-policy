@@ -21,7 +21,8 @@
 
 | 事件 | 模式 | 本插件用途 |
 | --- | --- | --- |
-| `system-prompt/assemble` | waterfall | `await next()` 后：只要有条目注册成功，就隐藏 DSH 内置 `bash`/`pwsh`（名字未被本插件条目占用的那些）；全部条目停用时不动 |
+| `system-prompt/assemble` | waterfall | 先 `reconcile()` 对齐最新配置（兜底、幂等），再 `await next()` 后裁剪：只要有条目注册成功，就隐藏 DSH 内置 `bash`/`pwsh`（名字未被本插件条目占用的那些）；全部条目停用时不动 |
+| `loader/volatile-update` | 作用域事件（loader 发往该 fiber 的 ctx） | **面板保存的主路径**：只有 volatile 字段变化时 loader 原地更新引用并发此事件、不重挂插件；插件据此调用 `reconcile()` 重新解析条目并注册/注销工具 |
 
 ## 关键机制
 

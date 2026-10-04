@@ -15,8 +15,8 @@
  * 6. 旧配置 preferred/bashPath 在 shells 为空时映射为等价条目（首次保存时落盘）。
  * 7. 非 Windows 平台只保留状态 API，不注册工具、不裁剪提示词。
  */
-import type { Context, Volatile } from 'cordis'
-import z from 'schemastery'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 import { defineTool, TOOL_ABORTED } from '@deepseek-ai/dsh-tools'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-settings'
@@ -757,6 +757,18 @@ export function apply(ctx: AppContext, config: Config): void {
       + 'Check the [exit code: N] marker on every shell result; investigate failures before moving on.'
   }
 
+  /**
+   * 按当前 volatile 配置重新应用策略（幂等）。
+   *
+   * DSH 对「只有 volatile 字段变化」的 entry 更新**不会重挂插件**：loader 把新值
+   * 原地写进已有的 Volatile 引用（cosmokit `updateVolatile`）并发 `loader/volatile-update`，
+   * 不再调用 apply。所以设置面板保存之后必须自己重新读配置，否则工具注册与 /status
+   * 会一直停在 apply 时的快照——用户看到的就是「保存后修改全部消失」。
+   */
+  const reconcile = (): void => {
+    if (isWindows) applyPolicy()
+  }
+
   // 状态与配置 API（所有平台注册；非 Windows 返回 supported: false）。
   // settings 的 client 端 RPC 有 allowlist 限制（apiproxy WEB_SETTINGS_NAMESPACES），
   // 本插件 namespace 不在其中，因此卡片读写都走本 API：host 端直接经 settings 服务持久化。
@@ -783,6 +795,8 @@ export function apply(ctx: AppContext, config: Config): void {
       }
 
       if (url.endsWith('/status') && req.method === 'GET') {
+        // 兜底：即使没收到 volatile-update 事件，也按最新配置对齐一次。
+        reconcile()
         const view = statusView()
         const bash = view.find((item) => item.resolvedPath.length > 0 && !isPwshFamily(item))
         const preferredEntry = view.find((item) => item.registered && item.primary) ?? view.find((item) => item.registered)
@@ -919,9 +933,16 @@ export function apply(ctx: AppContext, config: Config): void {
   // 应用策略（按条目注册 / 注销 shell 工具）。
   applyPolicy()
 
+  // volatile-only 配置更新（面板保存、外部改 patch）：loader 不重挂插件，只原地更新
+  // 引用并发这个事件，因此在这里重新应用策略，让工具注册与 /status 跟上新配置。
+  const volatileUpdates = ctx as unknown as { on(event: string, listener: () => void): () => void }
+  volatileUpdates.on('loader/volatile-update', () => { reconcile() })
+
   // 提示词工具面裁剪：本插件有工具注册成功时，隐藏 DSH 内置 bash/pwsh，
   // 让工具面完全由条目决定（内置工具名不能与本插件条目重名，见 entryProblem）。
   ctx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+    // 兜底对齐（幂等）：工具面与隐藏集合不落后于最新配置。
+    reconcile()
     const assembled = await next()
     const ours = new Set(registeredNames)
     if (ours.size === 0) return assembled

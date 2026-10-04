@@ -2,6 +2,20 @@
 
 本项目的所有重要变更记录于此。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.1.1] - 2026-10-05
+
+### 变更
+
+- **配置面板改为「折叠条目行 + 单条目配置界面」**：条目在列表里不再整卡平铺，而是**一行一条**，只显示条目名（只读；工具名为空时按可执行文件名推导并以弱化色显示）、「启用」checkbox 与「默认」radio；工具名、可执行文件路径（含「探测」）、工具提示词、沙箱完全权限与「删除」全部收进该条目**单独的配置界面**（点行尾「配置」进入，点「‹ 返回列表」退出）。条目多时不再一条撑满一屏。host 侧配置模型与 HTTP API 未变，已有配置无需迁移。
+- **折叠行上的问题圆点**：条目有问题时行内多一个红色 `!` 圆点，原因放在 `title` 悬停文本（客户端校验问题优先，其次是运行时 `error` / 未找到可执行文件）——避免折叠后「条目失效只能靠展开面板才知道」被彻底隐藏。
+- **新增/删除的视图切换**：「添加 shell」新建条目后直接进入它的配置界面；「保存」「放弃」「删除」都回到条目列表。
+
+### 修复
+
+- **面板保存后修改「消失」（新增/修改条目都不生效）**：DSH 对「只有 volatile 字段变化」的 entry 更新不重挂插件——`vendor/loader` 的 `_commitVolatile()` 原地 `updateVolatile` 已有引用并发 `loader/volatile-update`，`apply` 不再执行，因此 `applyPolicy()` 只在启动时跑过一次，`/status` 与工具注册一直停在启动快照（配置其实已正确写入 profile patch）。现在插件监听 `loader/volatile-update`，并在 `/status`、`system-prompt/assemble` 两处做幂等兜底对齐（`reconcile()`），保存后条目、工具注册与引导文本都会立即跟上。
+
+- **装进 profile 后启动报 `failed to import`、插件配置页不出现**：运行期依赖改用发布名 `@deepseek-ai/schemastery` 与 `@deepseek-ai/cordis`。`schemastery` / `cordis` 只是 `scripts/build.sh` 为编译建立的本地别名（`vendor/*` 的真实包名就是作用域名），从 GitHub 安装到 `profiles/<name>/node_modules` 后 Node 只在共享的 `~/.dsh/profiles/node_modules` 里命中作用域名那一份，裸名会 `ERR_MODULE_NOT_FOUND`，导致该 entry 无法 import（实测复现：`Cannot find package 'schemastery'`）。同步更新 `peerDependencies`（`@deepseek-ai/schemastery` 收紧到 `^3.18.4`，`.volatile()` 语义所需）与 `build.sh` 的作用域 junction。
+
 ## [0.1.0] - 2026-10-04
 
 ### 破坏性变更
