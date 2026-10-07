@@ -2,11 +2,13 @@
  * dsh-windows-shell-policy — client 配置页（plugins.bundle.config）。
  *
  * 在插件管理页的本插件详情页注册「Shell 工具」配置面板：可增删的 shell 条目列表。
- * 列表里的条目是**折叠态**——只显示名称（只读）、启用开关与「默认」单选，避免长条目
- * 撑满屏幕；名称、可执行文件路径（可探测）、工具提示词、沙箱完全权限与删除都收进
- * 该条目单独的「配置」界面（点行尾「配置」进入，点「返回列表」退出）。
+ * 列表里的条目是**折叠态**——只显示名称（只读；显示名优先，留空回落到工具名）、启用开关
+ * 与「默认」单选，避免长条目撑满屏幕；显示名、工具名、可执行文件路径（可探测）、工具提示词、
+ * 沙箱完全权限与删除都收进该条目单独的「配置」界面（点行尾「配置」进入，点「返回列表」退出）。
+ * 新建条目的「工具提示词」由 host 的 POST /defaults 预填成默认模板（面板不再各写一份
+ * 模板），并可随时「重置为默认」。
  * 读写走 host 插件自己的 API
- * （/dsh-shell-policy/api/status、/shells、/detect）——settings 的 client 端 RPC 有
+ * （/dsh-shell-policy/api/status、/shells、/detect、/defaults）——settings 的 client 端 RPC 有
  * apiproxy allowlist 限制，本插件 namespace 不在其中，故不依赖 settingsScope；
  * host 端仍经 settings 服务持久化。监听 settings/document-updated 事件实时刷新。
  *
@@ -15,7 +17,7 @@
  * = ['slots']（服务注入声明）；② register 必须带 name 字段（= slot 名）；
  * ③ rc.7 起该 slot 为 kind:'keyed'，注册必须带 key。
  */
-import { createElement, useEffect, useState } from 'react'
+import { createElement, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { SlotsService } from '@deepseek-ai/dsh-client-ui-slots'
 
 type ClientContext = {
@@ -34,8 +36,12 @@ const MAX_ENTRIES = 16
 interface EntryStatus {
   id: string
   name: string
+  /** 面板显示名；旧版 host 的 /status 没有这个字段，读取时兜底成空串。 */
+  label?: string
   enabled: boolean
   path: string
+  /** 旧版 host 的 /status 没有这个字段，读取时兜底成空串。 */
+  args?: string
   description: string
   fullAccess: boolean
   primary: boolean
@@ -58,8 +64,11 @@ interface Status {
 interface DraftEntry {
   id: string
   name: string
+  /** 面板显示名（只影响面板显示，不进入工具面）。 */
+  label: string
   enabled: boolean
   path: string
+  args: string
   description: string
   fullAccess: boolean
   primary: boolean
@@ -367,6 +376,14 @@ const rowNameDerivedStyle: Record<string, string> = {
   color: 'var(--dsw-alias-label-tertiary)',
 }
 
+/** 折叠行里跟在显示名后的工具名（弱化，说明模型看到的名称）。 */
+const rowMetaStyle: Record<string, string> = {
+  flex: 'none',
+  fontSize: '12px',
+  lineHeight: '1.4',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
 /** 折叠行上的问题标记（悬停显示原因，不占额外行高）。 */
 const warnBadgeStyle: Record<string, string> = {
   flex: 'none',
@@ -424,6 +441,61 @@ const wrapLabelStyle: Record<string, string> = {
   whiteSpace: 'normal',
 }
 
+/** 启动参数模板里的占位符（与 host 的 COMMAND_PLACEHOLDER 一致）。 */
+const COMMAND_PLACEHOLDER = '{command}'
+
+/** `path` 是否只是可执行文件名（与 host 的 isBareExecutableName 一致）。 */
+function isBareExecutableName(value: string): boolean {
+  return !/[\\/]/.test(value) && !/^[A-Za-z]:/.test(value)
+}
+
+/** 启动参数模板的保存前问题（与 host 的 argTemplateProblem 一致）。 */
+function argTemplateProblem(text: string | undefined): string | undefined {
+  const trimmed = (text ?? '').trim()
+  if (trimmed.length === 0) return undefined
+  if (parseArgs(trimmed) === undefined) return '启动参数的引号未闭合'
+  if (!trimmed.includes(COMMAND_PLACEHOLDER)) {
+    return `启动参数里必须写 ${COMMAND_PLACEHOLDER} 占位符（替换成实际命令）；留空则用家族默认，例如 -c ${COMMAND_PLACEHOLDER}`
+  }
+  return undefined
+}
+
+/** 解析「启动参数」文本（与 host 的 parseArgs 规则一致）；引号未闭合返回 undefined。 */
+function parseArgs(text: string | undefined): string[] | undefined {
+  const source = text ?? ''
+  const parsed: string[] = []
+  let current = ''
+  let quoted = false
+  let started = false
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]
+    if (char === '\\' && source[index + 1] === '"') {
+      current += '"'
+      index += 1
+      started = true
+      continue
+    }
+    if (char === '"') {
+      quoted = !quoted
+      started = true
+      continue
+    }
+    if (!quoted && /\s/.test(char as string)) {
+      if (started) {
+        parsed.push(current)
+        current = ''
+        started = false
+      }
+      continue
+    }
+    current += char
+    started = true
+  }
+  if (quoted) return undefined
+  if (started) parsed.push(current)
+  return parsed
+}
+
 /** 与 host 一致的默认工具名推导（pwsh 让位给内置工具，改名为 powershell）。 */
 function deriveName(path: string): string {
   const base = path.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat|sh)$/i, '')
@@ -447,16 +519,32 @@ function effectiveName(entry: DraftEntry): string {
   return derived.length > 0 ? derived : 'shell'
 }
 
+/** 面板里的条目名（显示名优先，留空回落到工具名 / 可执行文件名推导）。 */
+function displayName(entry: DraftEntry): string {
+  const label = (entry.label ?? '').trim()
+  if (label.length > 0) return label
+  const explicit = entry.name.trim()
+  if (explicit.length > 0) return explicit
+  const derived = deriveName(entry.path.trim())
+  return derived.length > 0 ? derived : '未命名'
+}
+
 /** 条目的保存前问题（undefined 表示可保存）。 */
 function entryProblem(entry: DraftEntry, all: readonly DraftEntry[]): string | undefined {
   if (!entry.enabled) return undefined
   const name = effectiveName(entry)
   if (name === 'run_code') return '工具名 run_code 是 DSH 保留名'
-  if (all.some((other) => other !== entry && other.enabled && effectiveName(other) === name)) {
-    return `工具名 "${name}" 与其它启用条目重复`
+  const conflict = all.find((other) => other !== entry && other.enabled && effectiveName(other) === name)
+  if (conflict !== undefined) {
+    return `工具名 "${name}" 与「${displayName(conflict)}」重复`
   }
   const path = entry.path.trim()
-  if (path.length > 0 && !/^[A-Za-z]:[\\/]|^\//.test(path)) return '路径必须是绝对路径'
+  const absolute = /^[A-Za-z]:[\\/]|^\//.test(path)
+  if (path.length > 0 && !absolute && !isBareExecutableName(path)) {
+    return '可执行文件要么填绝对路径，要么只填文件名（在 PATH 里查找）'
+  }
+  const argsProblem = argTemplateProblem(entry.args)
+  if (argsProblem !== undefined) return argsProblem
   return undefined
 }
 
@@ -465,8 +553,10 @@ function toDraft(entry: EntryStatus): DraftEntry {
   return {
     id: entry.id,
     name: entry.name,
+    label: entry.label ?? '',
     enabled: entry.enabled,
     path: entry.path,
+    args: entry.args ?? '',
     description: entry.description,
     fullAccess: entry.fullAccess,
     primary: entry.primary,
@@ -488,6 +578,11 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
   const [failed, setFailed] = useState<string | null>(null)
   // 正在「配置」界面里编辑的条目 id；null 表示条目列表视图。
   const [editingId, setEditingId] = useState<string | null>(null)
+  // 视图切换的滚动锚点（见下方 useLayoutEffect）：面板根节点、离开列表时的滚动位置、
+  // 列表视图的高度（作为配置界面的 min-height，避免页面高度缩水导致 scrollTop 被夹）。
+  const rootRef = useRef<any>(null)
+  const listScroll = useRef<{ target: any; top: number; left: number } | null>(null)
+  const [listHeight, setListHeight] = useState<number | null>(null)
 
   const load = (): void => {
     fetch('/dsh-shell-policy/api/status')
@@ -510,6 +605,69 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
   const hasProblem = problems.some((problem) => problem !== undefined)
   const blocked = !dirty || saving || hasProblem
 
+  /** 最近的真正可滚动祖先；找不到（或未挂载）时退回文档滚动容器。 */
+  const findScroller = (): any => {
+    const win = (globalThis as any).window
+    const doc = (globalThis as any).document
+    if (win === undefined || doc === undefined) return null
+    let node: any = rootRef.current == null ? null : rootRef.current.parentElement
+    while (node != null) {
+      const overflowY = win.getComputedStyle(node).overflowY
+      if ((overflowY === 'auto' || overflowY === 'scroll' || overflowY === 'overlay') && node.scrollHeight > node.clientHeight) return node
+      node = node.parentElement
+    }
+    return doc.scrollingElement ?? doc.documentElement ?? null
+  }
+
+  /**
+   * 进入条目的配置界面。
+   *
+   * 视图切换会改变面板高度：内容变短时浏览器会把 scrollTop 夹到新的上限，页面一长
+   * 「滚动进度」就丢了。这里做两件事：① 记下当前滚动位置，返回列表时原样恢复；
+   * ② 记下列表视图的高度，作为配置界面的 min-height，页面高度不缩水，夹取不会发生。
+   */
+  const openEntryConfig = (id: string): void => {
+    const root = rootRef.current
+    if (root != null) setListHeight(root.offsetHeight)
+    const scroller = findScroller()
+    if (scroller != null) listScroll.current = { target: scroller, top: scroller.scrollTop, left: scroller.scrollLeft }
+    setEditingId(id)
+  }
+
+  /** 回到条目列表（返回 / 保存 / 放弃 / 删除都走这里）。 */
+  const backToList = (): void => {
+    setEditingId(null)
+    setListHeight(null)
+  }
+
+  useLayoutEffect(() => {
+    const saved = listScroll.current
+    if (editingId === null) {
+      // 回到列表：列表高度与离开时一致，恢复是精确的。
+      listScroll.current = null
+      if (saved != null) {
+        saved.target.scrollTop = saved.top
+        saved.target.scrollLeft = saved.left
+      }
+      return
+    }
+    // 进入配置界面：把配置卡片顶部对齐滚动视口顶部（留 8px），用户不会落在卡片中间。
+    const scroller = findScroller()
+    const root = rootRef.current
+    if (scroller == null || root == null) return
+    const win = (globalThis as any).window
+    const doc = (globalThis as any).document
+    const rect = root.getBoundingClientRect()
+    const documentScroller = win !== undefined
+      && (scroller === win || scroller === doc?.scrollingElement || scroller === doc?.documentElement || scroller === doc?.body)
+    if (documentScroller) {
+      if (typeof win.scrollTo === 'function') win.scrollTo({ top: win.scrollY + rect.top - 8, left: win.scrollX })
+      return
+    }
+    const box = scroller.getBoundingClientRect()
+    scroller.scrollTop += (rect.top - box.top) - 8
+  }, [editingId])
+
   const update = (index: number, patch: Partial<DraftEntry>): void => {
     setDraft(entries.map((entry, i) => i === index ? { ...entry, ...patch } : entry))
   }
@@ -523,23 +681,31 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
     const entry: DraftEntry = {
       id: `entry-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       name: '',
+      label: '',
       enabled: true,
       path: '',
+      args: '',
       description: '',
       fullAccess: false,
       primary: entries.length === 0,
     }
     setDraft([...entries, entry])
-    setEditingId(entry.id)
-    void probe(entries.length, entry)
+    openEntryConfig(entry.id)
+    // 新建条目：先探测可执行文件，再用 host 的默认模板预填「工具提示词」。
+    void (async () => {
+      const probed = await probe(entries.length, entry)
+      await fillDefaultDescription(entries.length, probed)
+    })()
   }
 
   const removeEntry = (index: number): void => {
     setDraft(entries.filter((_, i) => i !== index))
-    setEditingId(null)
+    backToList()
   }
 
-  const probe = async (index: number, entry: DraftEntry): Promise<void> => {
+  /** 探测可执行文件；返回该条目探测后的形状（新建条目据此再取默认提示词）。 */
+  const probe = async (index: number, entry: DraftEntry): Promise<DraftEntry> => {
+    let next: DraftEntry
     try {
       const response = await fetch('/dsh-shell-policy/api/detect', {
         method: 'POST',
@@ -548,14 +714,33 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
       })
       const result = await response.json() as { ok?: boolean; path?: string }
       const found = result.ok === true && typeof result.path === 'string' && result.path.length > 0 ? result.path : ''
-      setDraft((current) => (current ?? entries).map((item, i) => {
-        if (i !== index) return item
-        return found.length > 0
-          ? { ...item, path: found, name: item.name.length > 0 ? item.name : deriveName(found), notice: undefined }
-          : { ...item, notice: '未探测到可执行文件，请手动填写路径' }
-      }))
+      next = found.length > 0
+        ? { ...entry, path: found, name: entry.name.length > 0 ? entry.name : deriveName(found), notice: undefined }
+        : { ...entry, notice: '未探测到可执行文件，请手动填写路径' }
     } catch {
-      setDraft((current) => (current ?? entries).map((item, i) => i === index ? { ...item, notice: '探测请求失败' } : item))
+      next = { ...entry, notice: '探测请求失败' }
+    }
+    setDraft((current) => (current ?? entries).map((item, i) => i === index ? next : item))
+    return next
+  }
+
+  /**
+   * 用 host 的默认模板填充某个条目的「工具提示词」（新建预填与「重置为默认」共用）。
+   * 模板由 host 的 defaultToolDescription 生成，面板不复制一份，避免两边漂移。
+   */
+  const fillDefaultDescription = async (index: number, entry: DraftEntry): Promise<void> => {
+    try {
+      const response = await fetch('/dsh-shell-policy/api/defaults', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: entry.name, path: entry.path, args: entry.args ?? '' }),
+      })
+      const result = await response.json() as { ok?: boolean; description?: string }
+      if (result.ok !== true || typeof result.description !== 'string') return
+      const description = result.description
+      setDraft((current) => (current ?? entries).map((item, i) => i === index ? { ...item, description } : item))
+    } catch {
+      // 取不到模板就保留当前文本（留空时 host 会回落到默认模板）。
     }
   }
 
@@ -570,8 +755,10 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
         shells: entries.map((entry) => ({
           id: entry.id,
           name: entry.name,
+          label: entry.label,
           enabled: entry.enabled,
           path: entry.path,
+          args: entry.args ?? '',
           description: entry.description,
           fullAccess: entry.fullAccess,
           primary: entry.primary,
@@ -582,7 +769,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
       .then((result) => {
         if ((result as { ok?: unknown }).ok !== true) throw new Error(String((result as { error?: unknown }).error ?? '保存失败'))
         setDraft(null)
-        setEditingId(null)
+        backToList()
         load()
       })
       .catch((error: unknown) => setFailed(String(error)))
@@ -591,7 +778,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
 
   const discard = (): void => {
     setDraft(null)
-    setEditingId(null)
+    backToList()
     setFailed(null)
   }
 
@@ -605,14 +792,6 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
         : `已注册：${registered.join('、')}`
 
   const errorLine = status?.registerError !== undefined && status.registerError.length > 0 ? status.registerError : null
-
-  /** 列表行显示的条目名：工具名留空时由可执行文件名推导。 */
-  const displayName = (entry: DraftEntry): string => {
-    const explicit = entry.name.trim()
-    if (explicit.length > 0) return explicit
-    const derived = deriveName(entry.path.trim())
-    return derived.length > 0 ? derived : '未命名'
-  }
 
   /** 折叠行上的问题提示（悬停可见）：客户端校验优先，其次是运行时状态。 */
   const entryWarning = (entry: DraftEntry, index: number): string | undefined => {
@@ -629,13 +808,24 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
   /** 折叠态条目行：只显示名称、启用、默认，以及进入「配置」界面的入口。 */
   const entryRow = (entry: DraftEntry, index: number): ReturnType<typeof createElement> => {
     const warning = entryWarning(entry, index)
-    const explicitName = entry.name.trim().length > 0
+    const label = (entry.label ?? '').trim()
+    const toolName = effectiveName(entry)
+    // 显示名优先；两者都没有时才用弱化色提示「名称是从路径推导的」。
+    const explicit = label.length > 0 || entry.name.trim().length > 0
+    const title = label.length > 0
+      ? `显示名：${label}；模型看到的工具名：${toolName}`
+      : entry.name.trim().length > 0
+        ? `工具名：${entry.name}`
+        : '名称由可执行文件路径推导，点「配置」可修改'
     return createElement('div', { key: entry.id, style: rowStyle },
       createElement('span', {
         key: 'name',
-        style: explicitName ? rowNameStyle : rowNameDerivedStyle,
-        title: explicitName ? entry.name : '名称由可执行文件路径推导，点「配置」可修改',
+        style: explicit ? rowNameStyle : rowNameDerivedStyle,
+        title,
       }, displayName(entry)),
+      label.length > 0 && label !== toolName
+        ? createElement('span', { key: 'toolName', style: rowMetaStyle, title: '模型看到的工具名' }, toolName)
+        : null,
       warning !== undefined
         ? createElement('span', { key: 'warning', style: warnBadgeStyle, title: warning }, '!')
         : null,
@@ -663,8 +853,8 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
         type: 'button',
         style: ghostStyle,
         disabled: saving,
-        title: '工具名、可执行文件路径、工具提示词、沙箱完全权限与删除',
-        onClick: () => setEditingId(entry.id),
+        title: '显示名、工具名、可执行文件路径、工具提示词、沙箱完全权限与删除',
+        onClick: () => openEntryConfig(entry.id),
       }, '配置'),
     )
   }
@@ -695,7 +885,7 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
           type: 'button',
           style: ghostStyle,
           disabled: saving,
-          onClick: () => setEditingId(null),
+          onClick: backToList,
         }, '‹ 返回列表'),
         createElement('span', { key: 'title', style: detailTitleStyle, title: displayName(entry) }, `配置：${displayName(entry)}`),
         createElement('span', { key: 'spacer', style: { flex: '1' } }),
@@ -706,6 +896,19 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
           disabled: saving || entries.length <= 1,
           onClick: () => removeEntry(index),
         }, '删除'),
+      ),
+      createElement('div', { key: 'label', style: fieldRowStyle },
+        createElement('span', { style: fieldLabelStyle }, '显示名'),
+        createElement('input', {
+          type: 'text',
+          style: inputStyle,
+          value: entry.label,
+          placeholder: '留空用工具名；只在面板里区分条目（例如 Git Bash / Cygwin）',
+          maxLength: 64,
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) => update(index, { label: event.target.value }),
+        }),
+        createElement('span', { style: fieldHintStyle }, '只影响面板显示与错误提示，模型看到的仍是工具名'),
       ),
       createElement('div', { key: 'name', style: fieldRowStyle },
         createElement('span', { style: fieldLabelStyle }, '工具名'),
@@ -720,13 +923,13 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
         createElement('span', { style: fieldHintStyle }, `模型看到的工具名：${effectiveName(entry)}`),
       ),
       createElement('div', { key: 'path', style: fieldRowStyle },
-        createElement('span', { style: fieldLabelStyle }, '可执行文件路径'),
+        createElement('span', { style: fieldLabelStyle }, '可执行文件'),
         createElement('div', { style: inlineRowStyle },
           createElement('input', {
             type: 'text',
             style: pathInputStyle,
             value: entry.path,
-            placeholder: '留空自动探测（Git / MSYS2 / Cygwin / PowerShell / PATH）',
+            placeholder: '绝对路径，或只填文件名（如 bash.exe，在 PATH 里查找）；留空自动探测',
             disabled: saving,
             onChange: (event: { target: { value: string } }) => update(index, { path: event.target.value }),
           }),
@@ -737,14 +940,24 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
             onClick: () => { void probe(index, entry) },
           }, '探测'),
         ),
+        createElement('span', { style: fieldHintStyle }, '填文件名时用 PATH 里的那个可执行文件；留空时按家族自动探测（Git / MSYS2 / Cygwin / PowerShell / PATH）'),
       ),
       createElement('div', { key: 'description', style: fieldRowStyle },
-        createElement('span', { style: fieldLabelStyle }, '工具提示词'),
+        createElement('div', { style: { ...inlineRowStyle, justifyContent: 'space-between' } },
+          createElement('span', { style: fieldLabelStyle }, '工具提示词'),
+          createElement('button', {
+            type: 'button',
+            style: ghostStyle,
+            disabled: saving,
+            title: '按当前工具名 / 路径 / PATH / 启动参数重新生成 host 的默认说明',
+            onClick: () => { void fillDefaultDescription(index, entry) },
+          }, '重置为默认'),
+        ),
         createElement('textarea', {
           style: textareaStyle,
           value: entry.description,
           rows: 3,
-          placeholder: '留空使用默认说明（含 fresh shell、workdir、exit code 约定）',
+          placeholder: '新建条目会自动填入默认说明；留空则由 host 回落到默认模板',
           disabled: saving,
           onChange: (event: { target: { value: string } }) => update(index, { description: event.target.value }),
         }),
@@ -757,6 +970,18 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
           onChange: (event: { target: { checked: boolean } }) => update(index, { fullAccess: event.target.checked }),
         }),
         createElement('span', null, '沙箱完全权限（跳过文件沙箱，执行不再逐次审批）'),
+      ),
+      createElement('div', { key: 'args', style: fieldRowStyle },
+        createElement('span', { style: fieldLabelStyle }, '启动参数'),
+        createElement('input', {
+          type: 'text',
+          style: inputStyle,
+          value: entry.args,
+          placeholder: '留空用默认：-c {command}（bash）/ -NoLogo -NoProfile -NonInteractive -Command {command}（pwsh）',
+          disabled: saving,
+          onChange: (event: { target: { value: string } }) => update(index, { args: event.target.value }),
+        }),
+        createElement('span', { style: fieldHintStyle }, '可执行文件之后的全部参数；{command} 会被替换成实际命令，想换掉 -c 这类开关就改这里，例如 -l -c {command}、-Command {command}'),
       ),
       runtimeLine,
       notice,
@@ -815,7 +1040,12 @@ function ShellPolicyCard(props: { view?: 'summary' | 'page'; remote: ClientConte
 
   // page：DSH 0.2.0 的 bundle 配置页（插件详情页内，无折叠）。
   if (view === 'page') {
-    return createElement('div', { style: pageStyle }, ...controls)
+    // 配置界面用列表视图的高度兜底：切到更短的界面时页面高度不缩水，
+    // 浏览器就不会夹取 scrollTop（与 openEntryConfig 的滚动锚点配合）。
+    const containerStyle = editingEntry !== null && listHeight !== null
+      ? { ...pageStyle, boxSizing: 'border-box', minHeight: `${listHeight}px` }
+      : pageStyle
+    return createElement('div', { style: containerStyle, ref: rootRef }, ...controls)
   }
 
   // 旧版 settings.plugin.item：折叠卡片。

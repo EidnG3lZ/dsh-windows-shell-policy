@@ -2,7 +2,7 @@
  * dsh-windows-shell-policy — Windows shell policy bundle plugin（host 侧）。
  *
  * 职责：
- * 1. 维护一组可增删的「shell 条目」（启用开关 / 工具名 / 可执行文件路径 / 工具提示词 /
+ * 1. 维护一组可增删的「shell 条目」（显示名 / 启用开关 / 工具名 / 可执行文件路径 / 工具提示词 /
  *    沙箱完全权限 / 默认项）。条目经 /dsh-shell-policy/api 由 client 配置页读写，
  *    并持久化在本插件的 profile entry config（settings.mutate）。
  * 2. 路径留空时自动探测（Git for Windows / MSYS2 / Cygwin / PowerShell / PATH）。
@@ -44,10 +44,14 @@ const PKG_NAME = 'dsh-windows-shell-policy'
 const MAX_SHELL_ENTRIES = 16
 /** 工具名长度上限。 */
 const MAX_TOOL_NAME = 64
+/** 显示名长度上限（面板里区分条目的名字，不进入工具面）。 */
+const MAX_LABEL = 64
 /** 路径长度上限。 */
 const MAX_PATH = 1024
 /** 工具提示词长度上限。 */
 const MAX_DESCRIPTION = 8_000
+/** 「启动参数」模板长度上限。 */
+const MAX_ARGS = 1_024
 /**
  * DSH 内置 shell 工具名：本插件有工具注册成功时，从提示词工具面隐藏这些名字
  * （内置工具在运行时无法注销，只能靠 assemble 过滤隐藏）。
@@ -81,10 +85,25 @@ export interface ShellEntry {
   id: string
   /** 工具名（模型看到的 shell 工具名）；同一组合内必须唯一。 */
   name: string
+  /**
+   * 显示名：只用于配置面板里区分条目（例如同为 `bash` 工具名的 git-bash 与 cygwin），
+   * 不参与工具名、工具提示词或执行。留空时面板回落到工具名 / 可执行文件名。
+   */
+  label: string
   /** 是否注册为该 shell 工具。 */
   enabled: boolean
-  /** shell 可执行文件路径；留空则自动探测。 */
+  /**
+   * 可执行文件：**绝对路径**（如 `C:\\Program Files\\Git\\bin\\bash.exe`）**或纯文件名**
+   * （如 `bash.exe`，此时在进程 PATH 里查找）；留空则按家族自动探测。
+   */
   path: string
+  /**
+   * 启动参数模板：可执行文件之后的**全部**参数，用 `{command}` 占位实际命令。
+   * 留空用家族默认（bash `-c {command}`、PowerShell `-NoLogo -NoProfile -NonInteractive -Command {command}`）；
+   * 想换掉取命令的开关（如 `-c`）就改这里，例如 `-l -c {command}`、`-Command {command}`、
+   * 甚至只写 `{command}`。空白分隔，支持双引号分组。
+   */
+  args: string
   /** 工具提示词（模型看到的工具说明）；留空使用默认模板。 */
   description: string
   /** 是否跳过文件沙箱（等同 danger-full-access，不再触发沙箱审批）。 */
@@ -108,8 +127,10 @@ export interface Config {
 const ShellEntrySchema = z.object({
   id: z.string().default(''),
   name: z.string().default(''),
+  label: z.string().default(''),
   enabled: z.boolean().default(false),
   path: z.string().default(''),
+  args: z.string().default(''),
   description: z.string().default(''),
   fullAccess: z.boolean().default(false),
   primary: z.boolean().default(false),
@@ -158,8 +179,11 @@ function normalizeEntry(value: unknown, index: number, usedIds: Set<string>): Sh
   if (value === null || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>
   const path = stringField(raw.path).trim().replace(/^"|"$/g, '').slice(0, MAX_PATH)
+  const args = stringField(raw.args).trim().slice(0, MAX_ARGS)
   const explicitName = stringField(raw.name)
   const name = sanitizeToolName(explicitName.length > 0 ? explicitName : deriveToolName(path))
+  // 显示名是给人看的：保留原字符（含中文），只折叠空白并截断。
+  const label = stringField(raw.label).replace(/\s+/g, ' ').trim().slice(0, MAX_LABEL)
   let id = stringField(raw.id).trim()
   if (id.length === 0 || usedIds.has(id)) id = `shell-${index + 1}-${name.length > 0 ? name : 'entry'}`
   while (usedIds.has(id)) id = `${id}_`
@@ -167,8 +191,10 @@ function normalizeEntry(value: unknown, index: number, usedIds: Set<string>): Sh
   return {
     id,
     name: name.length > 0 ? name : 'shell',
+    label,
     enabled: raw.enabled === true,
     path,
+    args,
     description: stringField(raw.description).trim().slice(0, MAX_DESCRIPTION),
     fullAccess: raw.fullAccess === true,
     primary: raw.primary === true,
@@ -196,17 +222,28 @@ function normalizeEntries(value: unknown): ShellEntry[] {
   return entries
 }
 
+/** 面板与错误信息里标识条目的名字：显示名优先，留空回落到工具名。 */
+function entryLabel(entry: Pick<ShellEntry, 'label' | 'name'>): string {
+  const label = entry.label.trim()
+  return label.length > 0 ? label : entry.name
+}
+
 /** 保存前的整表校验（返回错误文本；undefined 表示通过）。 */
 function validateEntriesForSave(entries: readonly ShellEntry[]): string | undefined {
-  const names = new Map<string, number>()
+  const names = new Map<string, { index: number; entry: ShellEntry }>()
   for (const [index, entry] of entries.entries()) {
     if (entry.name === 'run_code') return `第 ${index + 1} 条：\`run_code\` 是 DSH 保留工具名`
-    if (entry.path.length > 0 && !isAbsolute(entry.path)) return `第 ${index + 1} 条：路径必须是绝对路径`
+    const pathProblem = executablePathProblem(entry.path)
+    if (pathProblem !== undefined) return `第 ${index + 1} 条：${pathProblem}`
+    const argsProblem = argTemplateProblem(entry.args)
+    if (argsProblem !== undefined) return `第 ${index + 1} 条：${argsProblem}`
     if (!entry.enabled) continue
     const key = entry.name.toLowerCase()
     const seen = names.get(key)
-    if (seen !== undefined) return `第 ${index + 1} 条：工具名 "${entry.name}" 与第 ${seen + 1} 条重复`
-    names.set(key, index)
+    if (seen !== undefined) {
+      return `第 ${index + 1} 条：工具名 "${entry.name}" 与第 ${seen.index + 1} 条「${entryLabel(seen.entry)}」重复`
+    }
+    names.set(key, { index, entry })
   }
   return undefined
 }
@@ -230,7 +267,79 @@ function isPwshFamily(entry: Pick<ShellEntry, 'name' | 'path'>): boolean {
   return hint.includes('pwsh') || hint.includes('powershell')
 }
 
-/** PATH 里按可执行文件名查找（去引号，只认 .exe——.cmd/.bat 不能直接 spawn）。 */
+/** 启动参数模板里的占位符：会被替换成实际命令。 */
+const COMMAND_PLACEHOLDER = '{command}'
+
+/** `path` 是否只是可执行文件名（不含目录分隔符与盘符）。 */
+function isBareExecutableName(value: string): boolean {
+  return !/[\\/]/.test(value) && !/^[A-Za-z]:/.test(value)
+}
+
+/** 校验 `path` 的值域：空（自动探测）/ 绝对路径 / 纯文件名（在 PATH 里查找）。 */
+function executablePathProblem(path: string): string | undefined {
+  if (path.length === 0 || isAbsolute(path) || isBareExecutableName(path)) return undefined
+  return `可执行文件要么填绝对路径，要么只填文件名（在 PATH 里查找）；当前值含目录分隔符却不是绝对路径：${path}`
+}
+
+/**
+ * 解析「启动参数」文本：空白分隔，双引号分组，`\\"` 表示字面量引号。
+ * @returns 参数数组；引号未闭合返回 undefined（保存校验据此报错）。
+ */
+function parseArgs(text: string): string[] | undefined {
+  const parsed: string[] = []
+  let current = ''
+  let quoted = false
+  let started = false
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (char === '\\' && text[index + 1] === '"') {
+      current += '"'
+      index += 1
+      started = true
+      continue
+    }
+    if (char === '"') {
+      quoted = !quoted
+      started = true
+      continue
+    }
+    if (!quoted && /\s/.test(char as string)) {
+      if (started) {
+        parsed.push(current)
+        current = ''
+        started = false
+      }
+      continue
+    }
+    current += char
+    started = true
+  }
+  if (quoted) return undefined
+  if (started) parsed.push(current)
+  return parsed
+}
+
+/** 条目的启动参数模板（可执行文件之后的全部参数）；留空用家族默认，其中包含取命令的开关。 */
+function argTemplate(entry: Pick<ShellEntry, 'args'>, pwsh: boolean): string {
+  const text = entry.args.trim()
+  if (text.length > 0) return text
+  return pwsh
+    ? `-NoLogo -NoProfile -NonInteractive -Command ${COMMAND_PLACEHOLDER}`
+    : `-c ${COMMAND_PLACEHOLDER}`
+}
+
+/** 校验启动参数模板：引号闭合，且非空模板必须含 {command}（否则命令不会传给 shell）。 */
+function argTemplateProblem(text: string): string | undefined {
+  const trimmed = text.trim()
+  if (trimmed.length === 0) return undefined
+  if (parseArgs(trimmed) === undefined) return '启动参数的引号未闭合'
+  if (!trimmed.includes(COMMAND_PLACEHOLDER)) {
+    return `启动参数里必须写 ${COMMAND_PLACEHOLDER} 占位符（替换成实际命令）；留空则用家族默认，例如 -c ${COMMAND_PLACEHOLDER}`
+  }
+  return undefined
+}
+
+/** PATH 里按可执行文件名查找（去引号；无扩展名的补 .exe——.cmd/.bat 不能直接 spawn）。 */
 function pathCandidates(names: readonly string[]): string[] {
   const found: string[] = []
   for (const entry of (process.env.PATH ?? '').split(';')) {
@@ -238,7 +347,7 @@ function pathCandidates(names: readonly string[]): string[] {
     if (dir.length === 0) continue
     for (const candidateName of names) {
       if (candidateName.length === 0) continue
-      found.push(join(dir, `${candidateName}.exe`))
+      found.push(join(dir, /\.[A-Za-z0-9]+$/.test(candidateName) ? candidateName : `${candidateName}.exe`))
     }
   }
   return found
@@ -272,16 +381,67 @@ function pwshCandidates(name: string): string[] {
 }
 
 /**
- * 解析条目的可执行文件：显式路径存在则用它，否则按家族探测。
+ * 解析条目的可执行文件：
+ * - `path` 是绝对路径 → 直接用（不存在则条目不可用）；
+ * - `path` 只是文件名 → 在进程 PATH 里查找（命中即用它的绝对路径，**不回落**家族候选，
+ *   避免「填了 A 却起了 B」）；
+ * - `path` 留空 → 按家族内置候选探测（候选里也包含 PATH）。
  * @returns 可执行文件绝对路径；未找到返回空串。
  */
 function resolveShellPath(entry: ShellEntry): string {
-  if (entry.path.length > 0) return existsSync(entry.path) ? entry.path : ''
+  if (entry.path.length > 0) {
+    if (isBareExecutableName(entry.path)) return resolveExecutableInPath(entry.path)
+    return existsSync(entry.path) ? entry.path : ''
+  }
   const candidates = isPwshFamily(entry) ? pwshCandidates(entry.name) : bashCandidates(entry.name)
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate
   }
   return ''
+}
+
+/**
+ * 在进程 PATH 的每个目录里查找该可执行文件名（无扩展名时按 `<名字>.exe` 找，
+ * 与 Windows 的 PATHEXT 语义一致；只有 .exe 能直接 spawn）。
+ */
+function resolveExecutableInPath(name: string): string {
+  for (const candidate of pathCandidates([name])) {
+    if (existsSync(candidate)) return candidate
+  }
+  return ''
+}
+
+/**
+ * 条目的默认工具提示词。面板新建条目时经 POST /defaults 取同一份文本预填，
+ * 「重置为默认」也用它，因此 host 与面板不会各写一份模板。
+ */
+/** 按条目的启动参数模板构造 argv（{command} 替换成实际命令；PowerShell 家族加 UTF-8 前缀）。 */
+function buildArgv(entry: ShellEntry, executable: string, pwsh: boolean, command: string): string[] {
+  const payload = pwsh ? PWSH_PREAMBLE + command : command
+  const tokens = parseArgs(argTemplate(entry, pwsh)) ?? []
+  return [executable, ...tokens.map((token) => token.replaceAll(COMMAND_PLACEHOLDER, payload))]
+}
+
+export function defaultToolDescription(
+  entry: Pick<ShellEntry, 'name' | 'path' | 'args'>,
+  executable: string,
+): string {
+  const pwsh = isPwshFamily(entry)
+  const resolved = executable.trim()
+  const configured = entry.path.trim()
+  const target = resolved.length > 0 ? resolved : configured.length > 0 ? configured : `<${entry.name} executable>`
+  // 展示除 {command} 以外的启动参数（即取命令的开关与额外开关）。
+  const flags = (parseArgs(argTemplate(entry, pwsh)) ?? [])
+    .map((token) => token.replaceAll(COMMAND_PLACEHOLDER, '').trim())
+    .filter((token) => token.length > 0)
+    .join(' ')
+  const invocation = flags.length > 0 ? `${target} ${flags}` : target
+  return `Execute a ${entry.name} command (${invocation}) and return its stdout/stderr. `
+    + 'Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — '
+    + 'pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. '
+    + 'Long output is truncated to its tail. '
+    + 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; '
+    + 'read its output with `job_output` and stop it with `job_kill`.'
 }
 
 /** 条目运行时状态（配置字段 + 探测/注册结果）。 */
@@ -297,7 +457,7 @@ interface EntryStatus extends ShellEntry {
 /** 旧配置迁移：shells 为空时按 preferred/bashPath 生成等价条目（不落盘）。 */
 function migrateLegacyEntries(cfg: ResolvedConfig, onWindows: boolean): ShellEntry[] {
   if (!onWindows) return []
-  const base = { description: '', fullAccess: false, primary: true }
+  const base = { args: '', description: '', label: '', fullAccess: false, primary: true }
   if (cfg.legacyPreferred === 'pwsh') {
     // 旧 pwsh 模式 = 内置 pwsh 工具生效；迁移为未启用的 PowerShell 条目，
     // 需要本插件接管（含完全权限）时由用户在面板打开开关。
@@ -425,13 +585,8 @@ export function apply(ctx: AppContext, config: Config): void {
       !shell.fullAccess && ctx.get('sandbox') !== undefined && ctx.get('sandboxPolicy') !== undefined
         ? ESCALATION_TARGETS
         : []
-    const invocation = pwsh ? '`-Command`' : '`-c`'
-    const defaultDescription = `Execute a ${shell.name} command (${executable} ${invocation}) and return its stdout/stderr. `
-      + 'Each call runs in a fresh shell: no state (cwd, variables, functions) persists between calls — '
-      + 'pass `workdir` instead of using `cd`. Non-zero exits are reported as `[exit code: N]`. '
-      + 'Long output is truncated to its tail. '
-      + 'Set `run_in_background: true` for long-running commands: the call returns a job id immediately; '
-      + 'read its output with `job_output` and stop it with `job_kill`.'
+    // 与面板「新建条目预填 / 重置为默认」共用同一份模板（POST /defaults）。
+    const defaultDescription = defaultToolDescription(shell, executable)
 
     return defineTool({
       name: shell.name,
@@ -563,9 +718,10 @@ export function apply(ctx: AppContext, config: Config): void {
         }
 
         // argv 构造 + 沙箱 confine（DSH 0.2.0 起 confine 为异步）。
-        let argv: string[] = pwsh
-          ? [executable, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', PWSH_PREAMBLE + args.command]
-          : [executable, '-c', args.command]
+        // argv 全部由条目的启动参数模板生成（可执行文件之后的部分），{command} 替换成实际命令；
+        // 模板留空时用家族默认（bash `-c {command}`、PowerShell `-NoLogo … -Command {command}`），
+        // 因此要换掉 `-c` 这类取命令的开关只需改 args（见 ShellEntry.args）。
+        let argv: string[] = buildArgv(shell, executable, pwsh, args.command)
         let confined: ConfinedArgv | undefined
         if (!shell.fullAccess && policy !== undefined && policy.mode !== 'danger-full-access' && sandbox !== undefined) {
           confined = await sandbox.confine(argv, { ...policy, mode: policy.mode })
@@ -682,14 +838,20 @@ export function apply(ctx: AppContext, config: Config): void {
   }
 
   /** 校验条目并说明不可注册的原因（undefined 表示可注册）。 */
-  const entryProblem = (shell: ShellEntry, executable: string, claimed: Set<string>): string | undefined => {
+  const entryProblem = (shell: ShellEntry, executable: string, claimed: ReadonlyMap<string, ShellEntry>): string | undefined => {
     if (shell.name.length === 0) return '工具名为空'
     if (shell.name === 'run_code') return '`run_code` 是 DSH 保留工具名，请更换'
-    if (claimed.has(shell.name)) return `工具名 "${shell.name}" 与前面的条目重复`
+    const previous = claimed.get(shell.name)
+    if (previous !== undefined) {
+      return `工具名 "${shell.name}" 与前面的条目「${entryLabel(previous)}」重复`
+    }
     if (executable.length === 0) {
-      return shell.path.length > 0
-        ? `未找到可执行文件：${shell.path}`
-        : `未探测到 ${shell.name} 可执行文件；请填写路径或点击「探测」`
+      if (shell.path.length > 0) {
+        return isBareExecutableName(shell.path)
+          ? `PATH 里没有找到可执行文件：${shell.path}`
+          : `未找到可执行文件：${shell.path}`
+      }
+      return `未探测到「${entryLabel(shell)}」的可执行文件；请填写可执行文件名（在 PATH 里查找）、绝对路径，或点击「探测」`
     }
     if (ctx.tools.get(shell.name) !== undefined) {
       return `工具名 "${shell.name}" 已被 DSH 内置工具或其它插件占用；请改用别的名称（例如 pwsh → powershell）`
@@ -708,7 +870,7 @@ export function apply(ctx: AppContext, config: Config): void {
     disposeAll()
     const nextStatus: EntryStatus[] = []
     const nextRegistered: string[] = []
-    const claimed = new Set<string>()
+    const claimed = new Map<string, ShellEntry>()
     for (const shell of entries) {
       const item: EntryStatus = { ...shell, resolvedPath: '', registered: false }
       if (!shell.enabled) {
@@ -723,7 +885,7 @@ export function apply(ctx: AppContext, config: Config): void {
         nextStatus.push(item)
         continue
       }
-      claimed.add(shell.name)
+      claimed.set(shell.name, shell)
       try {
         disposers.set(shell.id, ctx.tools.register(buildTool(shell, executable)))
         item.registered = true
@@ -800,7 +962,7 @@ export function apply(ctx: AppContext, config: Config): void {
         const view = statusView()
         const bash = view.find((item) => item.resolvedPath.length > 0 && !isPwshFamily(item))
         const preferredEntry = view.find((item) => item.registered && item.primary) ?? view.find((item) => item.registered)
-        const errors = view.flatMap((item) => item.error === undefined ? [] : [`${item.name}: ${item.error}`])
+        const errors = view.flatMap((item) => item.error === undefined ? [] : [`${entryLabel(item)}: ${item.error}`])
         const { migrated } = currentEntries()
         send(200, {
           platform: process.platform,
@@ -863,12 +1025,40 @@ export function apply(ctx: AppContext, config: Config): void {
           name: stringField(body.name),
           enabled: true,
           path: stringField(body.path),
+          args: '',
           description: '',
           fullAccess: false,
           primary: false,
         }, 0, new Set<string>())
         const found = probe === undefined ? '' : resolveShellPath(probe)
         send(200, { ok: true, path: found })
+        return
+      }
+      if (url.endsWith('/defaults') && req.method === 'POST') {
+        let parsed: unknown
+        try {
+          parsed = await readJsonBody(req)
+        } catch {
+          send(400, { ok: false, error: 'invalid json body' })
+          return
+        }
+        const body = parsed as { name?: unknown; path?: unknown; args?: unknown }
+        const candidate = normalizeEntry({
+          id: 'defaults',
+          name: stringField(body.name),
+          enabled: true,
+          path: stringField(body.path),
+          args: stringField(body.args),
+          description: '',
+          fullAccess: false,
+          primary: false,
+        }, 0, new Set<string>())
+        if (candidate === undefined) {
+          send(400, { ok: false, error: 'invalid body' })
+          return
+        }
+        // 与 buildTool 的回落文本完全一致；面板用它预填/重置工具提示词。
+        send(200, { ok: true, description: defaultToolDescription(candidate, resolveShellPath(candidate)) })
         return
       }
       if (url.endsWith('/preferred') && req.method === 'POST') {

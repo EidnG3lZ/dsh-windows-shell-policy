@@ -50,7 +50,8 @@
   "scripts": {
     "build": "bash scripts/build.sh",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:host": "node tests/host-harness.mjs"
+    "test:host": "node tests/host-harness.mjs",
+    "test:exec": "node tests/executable-and-args.mjs"
   },
   "exports": {
     ".": {

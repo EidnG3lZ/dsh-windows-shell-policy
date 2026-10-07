@@ -260,6 +260,40 @@ console.log('== 工具名冲突 ==')
   check('只注册一个 bash', h.tools.has('bash') && h.tools.has('pwsh') && h.tools.size === 2, [...h.tools.keys()].join(','))
 }
 
+console.log('== 显示名（区分同工具名的条目）==')
+{
+  const h = wireServices(makeHarness({ builtinTools: ['pwsh'] }))
+  const values = { shells: [], preferred: 'auto', bashPath: '' }
+  apply(h.ctx, liveConfig(values))
+  values.shells = [
+    { id: 'e1', name: 'bash', label: 'Git Bash', enabled: true, path: GITBASH, description: '', fullAccess: false, primary: true },
+    { id: 'e2', name: 'bash', label: 'Cygwin', enabled: true, path: GITBASH, description: '', fullAccess: false, primary: false },
+  ]
+  h.emit('loader/volatile-update')
+  const status = await callApi(h.routes[0], '/dsh-shell-policy/api/status', 'GET')
+  check('显示名随条目返回', status.json.entries[0]?.label === 'Git Bash' && status.json.entries[1]?.label === 'Cygwin', JSON.stringify(status.json.entries.map((item) => item.label)))
+  check('重名条目错误提示带显示名', String(status.json.entries[1]?.error).includes('「Git Bash」'), JSON.stringify(status.json.entries[1]?.error))
+  check('registerError 用显示名', String(status.json.registerError ?? '').startsWith('Cygwin:'), JSON.stringify(status.json.registerError))
+  check('显示名不进入工具面', h.tools.has('bash') && !h.tools.has('Git Bash'), [...h.tools.keys()].join(','))
+
+  // 同名 shell 的常见用法：模型侧改用不同工具名（必须唯一），显示名只用于面板区分。
+  values.shells = [
+    { id: 'e1', name: 'bash', label: 'Git Bash', enabled: true, path: GITBASH, description: '', fullAccess: false, primary: true },
+    { id: 'e2', name: 'cygwin_bash', label: 'Cygwin', enabled: true, path: GITBASH, description: '', fullAccess: false, primary: false },
+  ]
+  h.emit('loader/volatile-update')
+  const both = await callApi(h.routes[0], '/dsh-shell-policy/api/status', 'GET')
+  check('不同工具名的条目共存', h.tools.has('bash') && h.tools.has('cygwin_bash'), [...h.tools.keys()].join(','))
+  check('共存条目均无错误', both.json.entries.every((item) => item.error === undefined), JSON.stringify(both.json.entries.map((item) => item.error)))
+
+  const dupSave = await callApi(h.routes[0], '/dsh-shell-policy/api/shells', 'POST', { shells: [
+    bashEntry({ label: 'Git Bash' }), bashEntry({ id: 'e2', label: 'Cygwin', primary: false }),
+  ] })
+  check('重名保存报错带显示名', dupSave.status === 400 && String(dupSave.json.error).includes('Git Bash'), JSON.stringify(dupSave.json))
+  const saved = await callApi(h.routes[0], '/dsh-shell-policy/api/shells', 'POST', { shells: [bashEntry({ label: 'Git Bash' })] })
+  check('显示名落盘', saved.status === 200 && h.settingsWrites.at(-1)?.ops?.[0]?.value?.[0]?.label === 'Git Bash', JSON.stringify(h.settingsWrites.at(-1)))
+}
+
 console.log('== 旧 pwsh 配置迁移 ==')
 {
   const h = wireServices(makeHarness({ builtinTools: ['pwsh'] }))

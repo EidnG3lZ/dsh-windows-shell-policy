@@ -36,6 +36,10 @@
 - settings 的 client 端 RPC 有 apiproxy allowlist（`WEB_SETTINGS_NAMESPACES`），插件自行注册的 namespace 不会被 serve 给浏览器——client 卡片读写需走插件自己的 host API，host 端仍经 settings 服务持久化
 - `system-prompt/assemble` 是 waterfall：必须 `await next()` 再裁剪；host 层无 scope tag 的 listener 全局接收所有 scope 的事件（`scopeTarget` 的 filter 对无 tag listener 放行）
 - 系统提示文本（sections）按会话快照注入，工具列表（tools）按请求刷新——引导文本新会话生效，工具面裁剪当前会话即生效
+- **argv 模板化**：命令是作为 argv 最后一个元素传的，所以条目级「启动参数」（`args`）做成**模板**而不是「追加参数」——`{command}` 占位实际命令，默认模板见 `argTemplate()`（bash `-c {command}`、PowerShell `-NoLogo -NoProfile -NonInteractive -Command {command}`）。这样连 `-c` / `-Command` 都能换，host 也不必去猜哪个开关是「取命令」的那个。**模板不写 `{command}` 会让命令根本传不进 shell**，保存校验因此强制它（`argTemplateProblem()`）。
+- **host 与 client 不能共享解析代码**：`path` 值域与启动参数模板的解析在 host（`isBareExecutableName` / `executablePathProblem` / `argTemplateProblem` / `parseArgs`）与 client（保存前预校验）各有一份，改规则要同步；client 还要容忍旧 host 缺失新字段（`toDraft()` 里 `?? ''` 兜底，否则 React 渲染直接抛 `Cannot read properties of undefined`）
+- **条目字段分两用**：`name` / `description` / `args` / `path` 决定模型看到的工具面与执行；`label`（显示名）只用于面板显示与错误文案（`entryLabel()`，留空回落工具名）。新增字段先归类，别把给人看的显示名混进工具名或工具提示词
+- **受限沙箱下写测试**：需要真实 spawn 的用例走管道会 `EPERM`（`tests/host-harness.mjs`，只能跑在完全权限下）；不 spawn 的逻辑用「记录型 spawn 桩」测（`tests/executable-and-args.mjs`，沙箱内可跑）。junction/symlink 同理：沙箱内 `fs.symlinkSync` 报 `EPERM`，`scripts/build.sh` 会先在 `rmSync` 里删掉已有 junction 再失败——**沙箱内改代码后要手动跑 `tsc -p tsconfig.json` + `tsdown`，别跑 build.sh**
 
 ## Client 侧
 
@@ -46,6 +50,11 @@
 - 折叠卡片模式（官方 PluginCard 同构）：头部 button（aria-expanded）+ chevron 旋转 + 展开 body + footer 保存/放弃；dirty 时头部「未保存」标记；样式用官方 CSS 变量（`--dsw-alias-*`）
 - **React inline style 不要用 `border` 简写**：CSS 变量在简写里会被拆解丢失（border-color 回落 `currentColor` 黑色），必须用 `borderWidth`/`borderStyle`/`borderColor` 长写
 - 终端卡片展示：工具实现 `presentCall`（card:'terminal'，title=命令）+ `presentResult`（解析输出末尾 `[exit code: N]` 标记拆出 exit pill）；exit 标记必须在输出**末尾**（`parseExitStatus` 锚定末尾），exit 0 不报标记
+- **面板内切换视图要保持滚动位置**：列表 ⇄ 单条目配置界面切换会改变面板高度，浏览器会把 `scrollTop` 夹到新上限（页面越长丢得越多）。做法：切走前记下「最近的可滚动祖先 + scrollTop」，再用离开时的高度给新视图 `minHeight`（`boxSizing:'border-box'`）兜底——页面高度不缩水就不会夹取——最后在 `useLayoutEffect`（DOM 更新后、绘制前）写回；进入子界面时把其顶部对齐滚动视口。滚动容器要用祖先查找得到，不要写死 `window`（宿主的滚动容器由 DSH 决定）
+
+## 默认提示词只有一份
+
+- 条目「工具提示词」的默认模板由 host 的 `defaultToolDescription()` 生成，经 `POST /defaults` 暴露给面板（新建条目预填 + 「重置为默认」）；**不要在 client 里再抄一份模板**，两边一定会漂移。新增影响模板的字段（如 `args`）时，改 host 一处即可
 
 ## 注入器
 
