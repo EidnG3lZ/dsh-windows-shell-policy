@@ -104,6 +104,22 @@ Issues, feature requests, usage experience: file at [issue #1 (feedback welcome)
 
 This project is licensed under the [MIT License](LICENSE).
 
+## Project Context Docs (for AI agents and collaborators)
+
+Start with [AGENTS.md](AGENTS.md) (long-term rules and read/write conventions), then route via [PROJECT_INDEX.md](PROJECT_INDEX.md).
+The context docs themselves are written in Chinese; the project overview and usage guide above are in English.
+
+| Doc | Content |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | Long-term rules: read rules, write rules, authoritative-source map, verification requirements |
+| [PROJECT_INDEX.md](PROJECT_INDEX.md) | Short positioning + "task → file/section" routing |
+| [NOW.md](NOW.md) | Current goal, progress, blockers, next steps, evidence entry points |
+| [MAP.md](MAP.md) | Directory/version/build-toolchain/profile-and-config-persistence map |
+| [RUNBOOK.md](RUNBOOK.md) | Evidence-based operations, preconditions and verification (with execution status) |
+| [DECISIONS.md](DECISIONS.md) | Confirmed decisions with rationale, scope and sources |
+| [RISKS.md](RISKS.md) | Evidenced risks, verification gaps and protections |
+| [history/README.md](history/README.md) | History index (search on demand, not read by default) |
+
 ## Developer Docs
 
 Craft notes (authoring conventions, DSH capability lists, composition promotion log) live in [docs/](docs/):

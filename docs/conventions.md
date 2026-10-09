@@ -39,7 +39,8 @@
 - **argv 模板化**：命令是作为 argv 最后一个元素传的，所以条目级「启动参数」（`args`）做成**模板**而不是「追加参数」——`{command}` 占位实际命令，默认模板见 `argTemplate()`（bash `-c {command}`、PowerShell `-NoLogo -NoProfile -NonInteractive -Command {command}`）。这样连 `-c` / `-Command` 都能换，host 也不必去猜哪个开关是「取命令」的那个。**模板不写 `{command}` 会让命令根本传不进 shell**，保存校验因此强制它（`argTemplateProblem()`）。
 - **host 与 client 不能共享解析代码**：`path` 值域与启动参数模板的解析在 host（`isBareExecutableName` / `executablePathProblem` / `argTemplateProblem` / `parseArgs`）与 client（保存前预校验）各有一份，改规则要同步；client 还要容忍旧 host 缺失新字段（`toDraft()` 里 `?? ''` 兜底，否则 React 渲染直接抛 `Cannot read properties of undefined`）
 - **条目字段分两用**：`name` / `description` / `args` / `path` 决定模型看到的工具面与执行；`label`（显示名）只用于面板显示与错误文案（`entryLabel()`，留空回落工具名）。新增字段先归类，别把给人看的显示名混进工具名或工具提示词
-- **受限沙箱下写测试**：需要真实 spawn 的用例走管道会 `EPERM`（`tests/host-harness.mjs`，只能跑在完全权限下）；不 spawn 的逻辑用「记录型 spawn 桩」测（`tests/executable-and-args.mjs`，沙箱内可跑）。junction/symlink 同理：沙箱内 `fs.symlinkSync` 报 `EPERM`，`scripts/build.sh` 会先在 `rmSync` 里删掉已有 junction 再失败——**沙箱内改代码后要手动跑 `tsc -p tsconfig.json` + `tsdown`，别跑 build.sh**
+- **受限沙箱下写测试**：需要真实 spawn 的用例走管道会 `EPERM`（`tests/host-harness.mjs`，只能跑在完全权限下）；不 spawn 的逻辑用「记录型 spawn 桩」测（`tests/executable-and-args.mjs`，沙箱内可跑）
+- **受限沙箱下的 shell 与 junction（2026-10-09 实测）**：MSYS/git-bash 在沙箱里**连启动都失败**（`C:\Program Files\Git\bin\bash.exe` → `*** fatal error - couldn't create signal pipe, Win32 error 5`）；PATH 里的 `bash` 其实是原生 Windows applet shell（自报 `bash is a builtin applet`，不认 `/e/...`，要写 `E:/...`），`niu`（Niubash 1.3.3，`D:\Scoop\shims\niu.exe`）是功能足够的 bash 替代，能跑 `node`/`tsc`/`tsdown`。但 `fs.symlinkSync(..., 'junction')` 的 `EPERM` **与 shell 无关**：沙箱只拒绝 **target 在工作区外**的符号链接/目录联接，target 在工作区内则成功（三种驱动实测一致）。`scripts/build.sh` 的 junction 全部指向 checkout，所以必然第一步失败、并已把旧 junction `rmSync` 掉——**受限沙箱内改代码后手动跑 `tsc -p tsconfig.json` + `tsdown`（依赖已建好的 junction），别跑 build.sh**；要在受限沙箱内跑通 build.sh，只能给完全文件权限或把 checkout 镜像进工作区。
 
 ## Client 侧
 

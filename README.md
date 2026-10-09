@@ -104,6 +104,21 @@ dev_inject_plugin <本目录>                      # host+UI 即时生效
 
 本项目采用 [MIT License](LICENSE)。
 
+## 项目上下文文档（供 AI 与协作者接续）
+
+接手任务时先读 [AGENTS.md](AGENTS.md)（长期规则与读写约定），再按 [PROJECT_INDEX.md](PROJECT_INDEX.md) 路由到具体文件：
+
+| 文档 | 内容 |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | 长期规则：读取规则、写入规则、权威来源分工、验证要求 |
+| [PROJECT_INDEX.md](PROJECT_INDEX.md) | 简短项目定位 +「任务 → 文件/章节」路由 |
+| [NOW.md](NOW.md) | 当前目标、进展、阻塞、下一步与证据入口 |
+| [MAP.md](MAP.md) | 目录、版本、构建工具链、profile/部署与配置持久化映射 |
+| [RUNBOOK.md](RUNBOOK.md) | 有依据的操作步骤、前置条件与验证（含执行状态标注） |
+| [DECISIONS.md](DECISIONS.md) | 已确认决策、理由、范围与来源 |
+| [RISKS.md](RISKS.md) | 有证据的风险、验证缺口与保护措施 |
+| [history/README.md](history/README.md) | 历史记录索引（按需检索，不默认读取） |
+
 ## 开发者文档
 
 开发工艺（编写规范、DSH 能力清单、组合插件转正流程）见 [docs/](docs/)：
