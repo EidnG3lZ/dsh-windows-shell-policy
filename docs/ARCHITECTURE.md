@@ -4,7 +4,7 @@
 > 基线：`v0.1.0` 梳理（多 shell 条目模型），部分内容已随 `v0.1.1` 更新；**未特殊说明时所有相对路径均以仓库根目录为基准**。
 > **2026-10-09 结构更正**：原文把本仓库描述为工作区下的嵌套目录，且所有相对链接带 `dsh-windows-shell-policy/` 前缀，实际 git 仓库根**就是**工作区根，链接已全部改为相对仓库根（详见 §2.1）。
 > **2026-10-09 开发经验复核**：§2.2 包元数据、§6 构建与发布、§7.3 客户端槽位必坑、§8 本机现状、§9.2/§9.3 注意点、§10 开发指引已按当前代码与本机实测逐条核对，据此修正了版本号 / `peerDependencies` 值域 / `scripts`、§7.3 第 3 条（该槽位已随 DSH 0.2.0 删除）、§8 备选 checkout 的 bootstrap 状态，并按**沙箱实测**重写了 §9.3 与 §6.2/§8 的构建警告（受限沙箱拒绝的是「工作区外 target 的 junction」，`niu` 可替代起不来的 git-bash，但不能绕过文件沙箱）。**§3–§5 及 §4 各功能小节的功能性描述仍未逐行复核**（未变化处保持原样）。
-> `#L行号` 锚点是**较早修订**的行号，源码增删后会整体漂移（§11 尤甚）；引用前请按符号名或文本在 `src/` 中重新定位，不要直接跳行号。
+> `#L行号` 锚点已随 **2026-10-09 模块拆分**全部替换为所属模块的文件链接（不再有行号锚点）；正文中的符号名请在该模块内按名定位。
 
 ## 目录
 
@@ -19,6 +19,8 @@
 9. [风险、文档漂移与代码级注意点](#9-风险文档漂移与代码级注意点)
 10. [后续开发指引](#10-后续开发指引)
 11. [附录：符号索引](#11-附录符号索引)
+12. [本次结构更正的核验记录](#12-本次结构更正的核验记录2026-10-09)
+13. [模块拆分记录](#13-模块拆分记录2026-10-09)
 
 ---
 
@@ -46,12 +48,31 @@ E:\DSHProjects\dsh-windows-shell-policy\      ← 工作区根 = git 仓库根�
 ├── tsdown.config.ts        client 侧打包配置（→ lib/client.js）
 ├── scripts/build.sh        一键构建（host tsc + client tsdown）
 ├── src/
-│   ├── index.ts            host：条目模型 + 探测 + 策略 + 多 shell 工具 + HTTP API（≈1086 行）
-│   └── client/index.ts     client：设置面板（折叠条目列表 + 单条目配置界面，≈1014 行）
+│   ├── index.ts             host 入口（facade）：name/inject + 重导出对外契约（38 行）
+│   ├── host/                host 实现，按职责分模块（9 个文件）
+│   │   ├── config.ts        条目模型 / Config schema / 归一化与保存校验 / volatile 读取 / 旧配置迁移（236 行）
+│   │   ├── shell-args.ts    shell 家族判定 / 启动参数模板解析 / argv 构造 / 默认工具提示词（121 行）
+│   │   ├── detect.ts        可执行文件解析（绝对路径 / PATH 文件名 / 家族自动探测）（104 行）
+│   │   ├── result.ts        shell 工具结果渲染与 exit/signal 解析（55 行）
+│   │   ├── tool.ts          单条目 shell 工具定义（defineTool，含执行全链路）（302 行）
+│   │   ├── policy.ts        策略状态机（注册/注销、状态视图、引导文本）（160 行）
+│   │   ├── api.ts           面板读写 HTTP API（/dsh-shell-policy/api/*）（214 行）
+│   │   ├── context.ts       DSH 服务面类型声明 / loader 反查 entry id / jobs kind 增强（56 行）
+│   │   └── apply.ts         插件装配（apply）（95 行）
+│   └── client/              client 配置页，按职责分模块（8 个文件）
+│       ├── index.ts         入口：inject + 两个槽位注册（54 行）
+│       ├── card.ts          ShellPolicyCard 容器（状态 / 请求 / 视图切换与滚动保持）（361 行）
+│       ├── entry-row.ts     折叠态条目行（展示组件）（73 行）
+│       ├── entry-detail.ts  单条目配置界面（展示组件）（156 行）
+│       ├── validation.ts    保存前预校验与名称推导（142 行）
+│       ├── styles.ts        全部内联样式对象（400 行）
+│       ├── icons.ts         ChevronIcon（23 行）
+│       └── types.ts         类型与常量（61 行）
 ├── lib/                    构建产物（已提交入库）
-│   ├── index.js  index.js.map         host 产物
-│   ├── client.js client.js.map        client 产物（CJS + __ModuleLoader__ 包装）
-│   └── types/index.d.ts               host 公开类型
+│   ├── index.js  index.js.map         host 入口产物
+│   ├── host/*.js  *.js.map            host 各模块产物
+│   ├── client.js client.js.map        client 产物（CJS + __ModuleLoader__ 包装，单文件）
+│   └── types/index.d.ts  types/host/*.d.ts   host 公开类型
 ├── tests/
 │   ├── host-harness.mjs    假 ctx 集成测试（61 项断言；真实 spawn git-bash / pwsh，无需启动 DSH）
 │   │                       —— 管道捕获输出，受限沙箱下 spawn 会 EPERM，需完全权限
@@ -143,19 +164,33 @@ E:\DSHProjects\dsh-windows-shell-policy\      ← 工作区根 = git 仓库根�
 
 ## 4. Host 侧详解（[src/index.ts](../src/index.ts)）
 
+`src/index.ts` 只保留插件身份与重导出（facade），实现按职责拆在 `src/host/`：
+
+| 模块 | 职责 |
+| --- | --- |
+| [host/config.ts](../src/host/config.ts) | 条目模型、Config schema、归一化 / 保存校验、volatile 读取、旧配置迁移 |
+| [host/shell-args.ts](../src/host/shell-args.ts) | shell 家族判定、启动参数模板解析、argv 构造、默认工具提示词 |
+| [host/detect.ts](../src/host/detect.ts) | 可执行文件解析（绝对路径 / PATH 文件名 / 家族自动探测） |
+| [host/result.ts](../src/host/result.ts) | 结果渲染与 exit / signal 状态解析 |
+| [host/tool.ts](../src/host/tool.ts) | 单条目 shell 工具定义（`buildTool`，含执行全链路） |
+| [host/policy.ts](../src/host/policy.ts) | 策略状态机 `createShellPolicy`（reconcile / statusView / registeredNames / guidanceText / disposeAll） |
+| [host/api.ts](../src/host/api.ts) | `/dsh-shell-policy/api/*` 路由与 settings 落盘 |
+| [host/context.ts](../src/host/context.ts) | DSH 服务面类型声明、loader 反查 entry id、jobs kind 增强 |
+| [host/apply.ts](../src/host/apply.ts) | 插件装配（`apply`：settings / 提示词裁剪 / section / 清理） |
+
 ### 4.1 导出与注入面
 
 | 导出 | 位置 | 说明 |
 | --- | --- | --- |
-| `name` | [src/index.ts](../src/index.ts#L37) | `'dsh-windows-shell-policy'` |
-| `inject` | [src/index.ts](../src/index.ts#L38) | `['tools', 'subprocess', 'systemPrompt', 'webServer']` |
-| `ShellEntry` / `Config` | [src/index.ts](../src/index.ts#L83-L143) | 条目类型 + schemastery schema（`shells` 数组 volatile），DSH 0.2.0 自动投影为设置表单 |
-| `apply` | [src/index.ts](../src/index.ts#L554) | 插件主体 |
+| `name` | [src/index.ts](../src/index.ts) | `'dsh-windows-shell-policy'` |
+| `inject` | [src/index.ts](../src/index.ts) | `['tools', 'subprocess', 'systemPrompt', 'webServer']` |
+| `ShellEntry` / `Config` | [host/config.ts](../src/host/config.ts) | 条目类型 + schemastery schema（`shells` 数组 volatile），DSH 0.2.0 自动投影为设置表单 |
+| `apply` | [host/apply.ts](../src/host/apply.ts) | 插件主体 |
 
 还做了两处类型扩展：
 
 - `declare module '@deepseek-ai/dsh-jobs'` 注册 `JobKindMap.bash`（[src/index.ts](../src/index.ts)），让后台任务 kind 类型合法。
-- 本地声明 `AppContext = Context & { webServer: {...} }`（[src/index.ts](../src/index.ts#L524)）—— **cordis 的 Context 类型合并只有在 import 对应包时才生效**，因此未 import `@deepseek-ai/dsh-host-webserver` 时必须自己声明服务面。
+- 本地声明 `AppContext = Context & { webServer: {...} }`（[host/context.ts](../src/host/context.ts)）—— **cordis 的 Context 类型合并只有在 import 对应包时才生效**，因此未 import `@deepseek-ai/dsh-host-webserver` 时必须自己声明服务面。
 
 ### 4.2 配置模型（条目数组 + volatile 约定）
 
@@ -186,27 +221,27 @@ export const Config = z.object({
 DSH 0.2.0 起：
 
 1. **live 字段必须标 `.volatile()`**，否则设置页不显示、`settings.mutate` 报 `Config field "x" is not volatile`；数组字段整体标 volatile 即可（schemastery 不允许在 volatile 字段内部再嵌 volatile）。
-2. **配置 namespace = profile entry id**（不再有插件自定义 namespace）：[`resolveOwnEntryId()`](../src/index.ts#L68) 通过 `ctx.loader.entries()` 反查 `options.name === PKG_NAME` 的 entry，取其 `options.id`。
-3. 读到的字段值是 `Volatile<T>` 引用，必须解包。插件用**结构检测**（有 `get()` 就当引用）而不是 `instanceof`，见 [`unwrapVolatile()`](../src/index.ts#L149)——避免 cosmokit 包名不匹配问题。
+2. **配置 namespace = profile entry id**（不再有插件自定义 namespace）：[`resolveOwnEntryId()`](../src/host/context.ts) 通过 `ctx.loader.entries()` 反查 `options.name === PKG_NAME` 的 entry，取其 `options.id`。
+3. 读到的字段值是 `Volatile<T>` 引用，必须解包。插件用**结构检测**（有 `get()` 就当引用）而不是 `instanceof`，见 [`unwrapVolatile()`](../src/host/config.ts)——避免 cosmokit 包名不匹配问题。
 
 `path` 必须是绝对路径或纯文件名（不含目录分隔符）、启动参数模板必须含 `{command}` 占位符且引号闭合
-6. **旧配置迁移**：`shells` 为空时由 [`migrateLegacyEntries()`](../src/index.ts#L458) 在内存里把旧字段映射成条目（不落盘）：`preferred=pwsh` → 未启用的 `powershell` 条目（旧 pwsh 模式等于 DSH 内置工具生效，本插件要接管时由用户打开开关）；否则 → 启用的 `bash` 条目（path 取旧 `bashPath`）。`/status` 用 `migrated` 标记，首次保存把 `shells` 写入配置。
+6. **旧配置迁移**：`shells` 为空时由 [`migrateLegacyEntries()`](../src/host/config.ts) 在内存里把旧字段映射成条目（不落盘）：`preferred=pwsh` → 未启用的 `powershell` 条目（旧 pwsh 模式等于 DSH 内置工具生效，本插件要接管时由用户打开开关）；否则 → 启用的 `bash` 条目（path 取旧 `bashPath`）。`/status` 用 `migrated` 标记，首次保存把 `shells` 写入配置。
 
-### 4.3 路径解析与探测（[`resolveShellPath()`](../src/index.ts#L391)）
+### 4.3 路径解析与探测（[`resolveShellPath()`](../src/host/detect.ts)）
 
 `path` 显式给出时：绝对路径直接用（不存在则条目不可用，面板报「未找到可执行文件：…」）；**只填文件名**（不含目录分隔符）则在进程 PATH 里查找。`path` 留空 → 按家族探测第一个存在的候选：
 
-- **Bash 家族**（[`bashCandidates()`](../src/index.ts#L357)）：`%ProgramFiles%\Git\bin\bash.exe` → `%ProgramFiles%\Git\usr\bin\bash.exe` → `%ProgramFiles(x86)%\Git\bin\bash.exe` → `%LOCALAPPDATA%\Programs\Git\bin\bash.exe` → `C:\msys64\usr\bin\bash.exe` → `C:\cygwin64\bin\bash.exe` → PATH 逐目录找 `<条目名>.exe` / `bash.exe`。
-- **PowerShell 家族**（[`pwshCandidates()`](../src/index.ts#L373)）：`%ProgramFiles%\PowerShell\7\pwsh.exe` → PATH 里 `pwsh.exe` → `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`。
-- 家族判定 [`isPwshFamily()`](../src/index.ts#L265)：条目名或路径里出现 `pwsh` / `powershell` 即归 PowerShell 家族（决定 `-Command` 方言与探测候选），否则按 Bash 家族。
-- PATH 只认 `.exe`（[`pathCandidates()`](../src/index.ts#L343)）：`.cmd`/`.bat` 不能直接 spawn；无扩展名的名字补 `.exe`，已带扩展名的不再追加。
-- **文件名走 PATH**（[`resolveExecutableInPath()`](../src/index.ts#L407)）：在 PATH 的每个目录里找该名字，命中即用它的绝对路径，**不回落**家族候选——填了 `myweirdsh` 就只找 `myweirdsh(.exe)`，避免「填了 A 却起了 B」。
-- **启动参数模板**（[`parseArgs()`](../src/index.ts#L288) / [`argTemplate()`](../src/index.ts#L323)）：`args` 是可执行文件之后**全部**参数的模板，`{command}` 占位实际命令；留空用家族默认（bash `-c {command}`、PowerShell `-NoLogo -NoProfile -NonInteractive -Command {command}`），所以 `-c` 本身也能改。空白分隔、双引号分组、`\"` 转义；引号未闭合或缺 `{command}` 都在保存时 400。
+- **Bash 家族**（[`bashCandidates()`](../src/host/detect.ts)）：`%ProgramFiles%\Git\bin\bash.exe` → `%ProgramFiles%\Git\usr\bin\bash.exe` → `%ProgramFiles(x86)%\Git\bin\bash.exe` → `%LOCALAPPDATA%\Programs\Git\bin\bash.exe` → `C:\msys64\usr\bin\bash.exe` → `C:\cygwin64\bin\bash.exe` → PATH 逐目录找 `<条目名>.exe` / `bash.exe`。
+- **PowerShell 家族**（[`pwshCandidates()`](../src/host/detect.ts)）：`%ProgramFiles%\PowerShell\7\pwsh.exe` → PATH 里 `pwsh.exe` → `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`。
+- 家族判定 [`isPwshFamily()`](../src/host/shell-args.ts)：条目名或路径里出现 `pwsh` / `powershell` 即归 PowerShell 家族（决定 `-Command` 方言与探测候选），否则按 Bash 家族。
+- PATH 只认 `.exe`（[`pathCandidates()`](../src/host/detect.ts)）：`.cmd`/`.bat` 不能直接 spawn；无扩展名的名字补 `.exe`，已带扩展名的不再追加。
+- **文件名走 PATH**（[`resolveExecutableInPath()`](../src/host/detect.ts)）：在 PATH 的每个目录里找该名字，命中即用它的绝对路径，**不回落**家族候选——填了 `myweirdsh` 就只找 `myweirdsh(.exe)`，避免「填了 A 却起了 B」。
+- **启动参数模板**（[`parseArgs()`](../src/host/shell-args.ts) / [`argTemplate()`](../src/host/shell-args.ts)）：`args` 是可执行文件之后**全部**参数的模板，`{command}` 占位实际命令；留空用家族默认（bash `-c {command}`、PowerShell `-NoLogo -NoProfile -NonInteractive -Command {command}`），所以 `-c` 本身也能改。空白分隔、双引号分组、`\"` 转义；引号未闭合或缺 `{command}` 都在保存时 400。
 - 局限：未覆盖 WSL，以及非 `bash.exe` 命名的 shell（写绝对路径，或放进 PATH 后只填文件名）。
 
-### 4.4 策略状态机（[`applyPolicy()`](../src/index.ts#L863)）
+### 4.4 策略状态机（[`applyPolicy()`](../src/host/policy.ts)）
 
-状态变量（[src/index.ts](../src/index.ts#L566-L569)）：`status`（每条目运行时状态数组）、`registeredNames`（已注册工具名）、`appliedSignature`（幂等签名）、`disposers`（条目 id → 工具注销函数）。
+状态变量（[host/apply.ts](../src/host/apply.ts)）：`status`（每条目运行时状态数组）、`registeredNames`（已注册工具名）、`appliedSignature`（幂等签名）、`disposers`（条目 id → 工具注销函数）。
 
 ```
 entries   = currentEntries()                        // 配置条目，或旧配置迁移结果
@@ -220,15 +255,15 @@ for each shell of entries:
     ctx.tools.register(buildTool(shell, executable)) → registered = true，registeredNames.push(name)
 ```
 
-- **幂等守门**（[src/index.ts](../src/index.ts#L866-L868)）：条目集合、顺序、内容或平台未变则直接返回，避免重复注册。
-- **全量重建**（[src/index.ts](../src/index.ts#L870)）：任一变化都先 [`disposeAll()`](../src/index.ts#L572) 注销旧工具再重注册；disposer 按条目 `id` 存在 Map 里。
-- **逐条目隔离**（[src/index.ts](../src/index.ts#L873-L898)）：失败只写 `item.error`；`claimed` 集合保证同名条目只有第一个注册成功；注册抛错同样捕获成 `工具注册失败：…`，不冒泡。
-- **不可注册的原因**由 [`entryProblem()`](../src/index.ts#L841) 汇总：工具名为空、`run_code` 保留名、与前面条目重名、可执行文件未找到（区分「显式路径不存在」与「未探测到」）、`ctx.tools.get(name)` 已被 DSH 内置工具 / 其它插件占用。`claimed` 是 `Map<工具名, 条目>`，所以重名文案能指出「与前面的条目『<显示名>』重复」；凡是要说明「是哪一条」的文案都经 `entryLabel()`（显示名优先，留空回落工具名），`/status` 的 `registerError` 汇总同理。
-- 卸载时 [`disposeAll()`](../src/index.ts#L572-L574) 清理全部动态工具。
+- **幂等守门**（[host/policy.ts](../src/host/policy.ts)）：条目集合、顺序、内容或平台未变则直接返回，避免重复注册。
+- **全量重建**（[host/policy.ts](../src/host/policy.ts)）：任一变化都先 [`disposeAll()`](../src/host/policy.ts) 注销旧工具再重注册；disposer 按条目 `id` 存在 Map 里。
+- **逐条目隔离**（[host/policy.ts](../src/host/policy.ts)）：失败只写 `item.error`；`claimed` 集合保证同名条目只有第一个注册成功；注册抛错同样捕获成 `工具注册失败：…`，不冒泡。
+- **不可注册的原因**由 [`entryProblem()`](../src/host/policy.ts) 汇总：工具名为空、`run_code` 保留名、与前面条目重名、可执行文件未找到（区分「显式路径不存在」与「未探测到」）、`ctx.tools.get(name)` 已被 DSH 内置工具 / 其它插件占用。`claimed` 是 `Map<工具名, 条目>`，所以重名文案能指出「与前面的条目『<显示名>』重复」；凡是要说明「是哪一条」的文案都经 `entryLabel()`（显示名优先，留空回落工具名），`/status` 的 `registerError` 汇总同理。
+- 卸载时 [`disposeAll()`](../src/host/policy.ts) 清理全部动态工具。
 
-### 4.5 shell 工具定义（[`buildTool()`](../src/index.ts#L580)）
+### 4.5 shell 工具定义（[`buildTool()`](../src/host/tool.ts)）
 
-工具由 `defineTool({...})` 按条目单独声明，刻意与官方 shell 工具对齐：`name` = 条目工具名，`description` = 条目「工具提示词」，留空回落到 [`defaultToolDescription()`](../src/index.ts#L425) 生成的默认模板（含工具名、可执行文件、去掉 `{command}` 的开关）。**该函数是模板的唯一来源**：面板新建条目预填与「重置为默认」都经 `POST /defaults` 调它，避免 client 再抄一份。
+工具由 `defineTool({...})` 按条目单独声明，刻意与官方 shell 工具对齐：`name` = 条目工具名，`description` = 条目「工具提示词」，留空回落到 [`defaultToolDescription()`](../src/host/shell-args.ts) 生成的默认模板（含工具名、可执行文件、去掉 `{command}` 的开关）。**该函数是模板的唯一来源**：面板新建条目预填与「重置为默认」都经 `POST /defaults` 调它，避免 client 再抄一份。
 
 **参数**（[src/index.ts](../src/index.ts)）：
 
@@ -239,52 +274,52 @@ for each shell of entries:
 | `timeoutMs` | | 默认 120000，超时 kill |
 | `workdir` | | 缺省用 session 工作区；相对路径按 session cwd 解析 |
 | `run_in_background` | | 立即返回 job id，无超时 |
-| `sandbox_permissions` / `justification` | | **仅非 fullAccess 条目**暴露（`enum` 为 `ESCALATION_TARGETS`）：只用于「刚被沙箱拒绝的同一条命令」一次性重试升级；fullAccess 条目不暴露它们，模型硬塞会直接报错（[src/index.ts](../src/index.ts#L681-L686)） |
+| `sandbox_permissions` / `justification` | | **仅非 fullAccess 条目**暴露（`enum` 为 `ESCALATION_TARGETS`）：只用于「刚被沙箱拒绝的同一条命令」一次性重试升级；fullAccess 条目不暴露它们，模型硬塞会直接报错（[host/tool.ts](../src/host/tool.ts)） |
 
-**输出 schema / 渲染 / 卡片**（[src/index.ts](../src/index.ts#L618-L826)）：后台返回 `{kind:'background', jobId}`；前台返回 `{exitCode, timedOut, aborted, stdout{text,truncated}, stderr{text,truncated}, sandbox?}`（嵌套 object 一律 `additionalProperties:false`）。`presentCall` → `{card:'terminal', title: command, description, cwd?}`；`presentResult` 用 [`parseExitStatus()`](../src/index.ts#L504) 从末尾拆出 `[exit code: N]`/`[killed by signal: X]` 作为独立 pill，正文不含标记（后台 / 错误时退回 `generic` 围栏）。
+**输出 schema / 渲染 / 卡片**（[host/tool.ts](../src/host/tool.ts)）：后台返回 `{kind:'background', jobId}`；前台返回 `{exitCode, timedOut, aborted, stdout{text,truncated}, stderr{text,truncated}, sandbox?}`（嵌套 object 一律 `additionalProperties:false`）。`presentCall` → `{card:'terminal', title: command, description, cwd?}`；`presentResult` 用 [`parseExitStatus()`](../src/host/result.ts) 从末尾拆出 `[exit code: N]`/`[killed by signal: X]` 作为独立 pill，正文不含标记（后台 / 错误时退回 `generic` 围栏）。
 
-**`execute()` 完整链路**（[src/index.ts](../src/index.ts#L674)）：
+**`execute()` 完整链路**（[host/tool.ts](../src/host/tool.ts)）：
 
-1. 校验 `command` / `description` 非空；fullAccess 条目拒绝 `sandbox_permissions`/`justification`（[src/index.ts](../src/index.ts#L681-L684)），其余走 [`validateEscalationArgs()`](../src/index.ts#L686)。
+1. 校验 `command` / `description` 非空；fullAccess 条目拒绝 `sandbox_permissions`/`justification`（[host/tool.ts](../src/host/tool.ts)），其余走 [`validateEscalationArgs()`](../src/host/tool.ts)。
 2. **workdir 解析**：exec.agent?.session.header.cwd 为基准；相对路径 `resolve(headerCwd, workdir)`；缺省 `headerCwd ?? process.cwd()`。
 3. **沙箱策略**：`sandboxPolicy.resolve({session})` 得 standing policy；非 fullAccess 且带 `sandbox_permissions` 时先查 `escalationModes` 非空，再 `approveEscalation(...)`（`toolName` 传条目名），批准后把 mode 覆盖到 policy 副本。
-4. **argv 构造**（[src/index.ts](../src/index.ts#L724)）：[`buildArgv()`](../src/index.ts#L419) 按条目的启动参数模板逐 token 把 `{command}` 替换成实际命令（PowerShell 家族的替换值前面再加 [`PWSH_PREAMBLE`](../src/index.ts#L61)）——默认模板 bash `['-c', command]`、PowerShell `['-NoLogo','-NoProfile','-NonInteractive','-Command', PREAMBLE+command]`；条目自定义模板则完全按它来（可以去掉 `-c`、换成别的开关，甚至只留 `{command}`）。
-5. **confine**（[src/index.ts](../src/index.ts#L727-L730)）：`!fullAccess && policy.mode !== 'danger-full-access' && sandbox !== undefined` 时 `await sandbox.confine(argv, policy)`（0.2.0 起异步）替换 argv——**fullAccess 条目完全跳过**，因此不会出现沙箱拒绝，也就不会触发升级审批。
+4. **argv 构造**（[host/tool.ts](../src/host/tool.ts)）：[`buildArgv()`](../src/host/shell-args.ts) 按条目的启动参数模板逐 token 把 `{command}` 替换成实际命令（PowerShell 家族的替换值前面再加 [`PWSH_PREAMBLE`](../src/host/shell-args.ts)）——默认模板 bash `['-c', command]`、PowerShell `['-NoLogo','-NoProfile','-NonInteractive','-Command', PREAMBLE+command]`；条目自定义模板则完全按它来（可以去掉 `-c`、换成别的开关，甚至只留 `{command}`）。
+5. **confine**（[host/tool.ts](../src/host/tool.ts)）：`!fullAccess && policy.mode !== 'danger-full-access' && sandbox !== undefined` 时 `await sandbox.confine(argv, policy)`（0.2.0 起异步）替换 argv——**fullAccess 条目完全跳过**，因此不会出现沙箱拒绝，也就不会触发升级审批。
 6. **spawn spec**：`{argv, cwd, stdio:{stdin:'ignore', stdout:collect, stderr:collect}, graceMs:3000, signal, env: collectDshEnv()}`，`collect = {maxBytes: 64_000, spill: {maxBytes: 64*1024*1024}}`。
-7. **后台分支**（[src/index.ts](../src/index.ts#L742)）：`ctx.get('jobs')` 缺失直接报错；预检 `exec.signal.aborted`；`jobs.start({kind:'bash', label: command, owner, run})`，句柄实现 `cancel`（terminate）/ `done`（→ `JobOutcome`）/ `readOutput`（stdout/stderr 各自 offset，stderr 以 `[stderr]` 前缀拼接）。
-8. **前台分支**（[src/index.ts](../src/index.ts#L783-L817)）：默认 120s；`AbortController` + `setTimeout` 生成超时信号，同时监听 `exec.signal`；`await handle.done`；从 `handle.collected.*.readFrom(0)` 取文本与 `lossy`。
-9. **沙箱拒绝判定**（[src/index.ts](../src/index.ts#L797-L806)）：`confined !== undefined` 且 `exitCode !== 0` 且 stderr 命中任一 `denialSignatures` → 结果带 `sandbox:{mode, denied:true}`（fullAccess 条目永不进入此分支）。
+7. **后台分支**（[host/tool.ts](../src/host/tool.ts)）：`ctx.get('jobs')` 缺失直接报错；预检 `exec.signal.aborted`；`jobs.start({kind:'bash', label: command, owner, run})`，句柄实现 `cancel`（terminate）/ `done`（→ `JobOutcome`）/ `readOutput`（stdout/stderr 各自 offset，stderr 以 `[stderr]` 前缀拼接）。
+8. **前台分支**（[host/tool.ts](../src/host/tool.ts)）：默认 120s；`AbortController` + `setTimeout` 生成超时信号，同时监听 `exec.signal`；`await handle.done`；从 `handle.collected.*.readFrom(0)` 取文本与 `lossy`。
+9. **沙箱拒绝判定**（[host/tool.ts](../src/host/tool.ts)）：`confined !== undefined` 且 `exitCode !== 0` 且 stderr 命中任一 `denialSignatures` → 结果带 `sandbox:{mode, denied:true}`（fullAccess 条目永不进入此分支）。
 10. **中止语义**：`exec.signal.aborted` → 抛 `HarnessError('tool call aborted', TOOL_ABORTED)`（`name='AbortError'`）；`timedOut` 与 `aborted` 区分开；`finally` 清理 timeout 与 abort 监听。
 
-**环境变量语义（易误读，已核对 DSH 源码）**：[`collectDshEnv()`](../src/index.ts#L546) **只挑 `DSH_*`**，看起来像「只给子进程传 DSH 变量」。实际上 DSH 的 `spawn` 会把显式 `env` **合并**到一份 scrub 过的父环境之上（`subprocess-local/src/spawn.ts` 的 `childEnv()`：`scrubbedParentEnv()` 去掉 `KEY|PASSWORD|SECRET|TOKEN` 与全部 `DSH_*`，再把显式条目按平台语义覆盖上去）。所以 `PATH`/`HOME`/代理变量会正常继承，而 `DSH_*` 事实由本函数刻意重新注入。**修改此处前务必理解这层契约。**
+**环境变量语义（易误读，已核对 DSH 源码）**：[`collectDshEnv()`](../src/host/tool.ts) **只挑 `DSH_*`**，看起来像「只给子进程传 DSH 变量」。实际上 DSH 的 `spawn` 会把显式 `env` **合并**到一份 scrub 过的父环境之上（`subprocess-local/src/spawn.ts` 的 `childEnv()`：`scrubbedParentEnv()` 去掉 `KEY|PASSWORD|SECRET|TOKEN` 与全部 `DSH_*`，再把显式条目按平台语义覆盖上去）。所以 `PATH`/`HOME`/代理变量会正常继承，而 `DSH_*` 事实由本函数刻意重新注入。**修改此处前务必理解这层契约。**
 
-### 4.6 结果渲染（[`renderShellResult()`](../src/index.ts#L480)）
+### 4.6 结果渲染（[`renderShellResult()`](../src/host/result.ts)）
 
 - 正文 = stdout；stderr 非空时以 `[stderr]` 段落追加；全空则 `(no output)`。
 - 标记顺序：沙箱拒绝（`sandboxDenialMarker(mode)` + 可能的升级提示行）→ `[timed out]` → `[aborted]` 或 `[exit code: N]`（**exit 0 不报**）。
-- 标记一律追加在**末尾**，因为 [`parseExitStatus()`](../src/index.ts#L504) 锚定末尾做反向解析，`presentResult` 再把 exit 状态拆成终端卡片的独立 pill。
+- 标记一律追加在**末尾**，因为 [`parseExitStatus()`](../src/host/result.ts) 锚定末尾做反向解析，`presentResult` 再把 exit 状态拆成终端卡片的独立 pill。
 
-### 4.7 HTTP API（面板读写通道，[src/index.ts](../src/index.ts#L937-L1104)）
+### 4.7 HTTP API（面板读写通道，[host/api.ts](../src/host/api.ts)）
 
 `ctx.effect(() => ctx.webServer.register({kind:'prefix', path:'/dsh-shell-policy/api', handler}))`，**所有平台都注册**：
 
 | 方法 + 路径 | 行为 |
 | --- | --- |
-| `GET /dsh-shell-policy/api/status` | 返回 `{platform, supported, entries, migrated, registered: string[], registerError?, …}`；`entries` 是 [`EntryStatus[]`](../src/index.ts#L448-L455)（条目配置字段 + `resolvedPath` + `registered` + `error`），另附旧客户端兼容字段 `effective` / `bashFound` / `bashPath` / `preferred` / `configuredBashPath`（[src/index.ts](../src/index.ts#L959-L981)） |
-| `POST /dsh-shell-policy/api/shells` | body `{shells}`；`normalizeEntries` 归一化 → `validateEntriesForSave` 校验（≤16、名称唯一、`run_code` 保留、路径与 PATH 目录必须绝对、启动参数引号闭合）→ `settings.mutate(entryId, [{op:'set', path:['shells'], value}])`；不合法 400、落盘失败 500，均带原因（[src/index.ts](../src/index.ts#L983-L1012)） |
-| `POST /dsh-shell-policy/api/detect` | body `{name, path}` → 走 `resolveShellPath` 返回 `{ok, path}`（`path` 是文件名时在 PATH 里找；留空时按家族探测；未找到时 `path: ''`）（[src/index.ts](../src/index.ts#L1014-L1035)） |
-| `POST /dsh-shell-policy/api/defaults` | body `{name, path, args}` → 归一化后调 [`defaultToolDescription()`](../src/index.ts#L425) 返回 `{ok, description}`；面板「新建条目预填」与「重置为默认」都打这个接口，模板只在 host 存在一份（[src/index.ts](../src/index.ts#L1037-L1063)） |
-| `POST /dsh-shell-policy/api/preferred` | 旧客户端兼容：写 `preferred`（auto \| bash \| pwsh）（[src/index.ts](../src/index.ts#L1064-L1083)） |
-| `POST /dsh-shell-policy/api/bashpath` | 旧客户端兼容：写 `bashPath`（[src/index.ts](../src/index.ts#L1085-L1101)） |
+| `GET /dsh-shell-policy/api/status` | 返回 `{platform, supported, entries, migrated, registered: string[], registerError?, …}`；`entries` 是 [`EntryStatus[]`](../src/host/policy.ts)（条目配置字段 + `resolvedPath` + `registered` + `error`），另附旧客户端兼容字段 `effective` / `bashFound` / `bashPath` / `preferred` / `configuredBashPath`（[host/api.ts](../src/host/api.ts)） |
+| `POST /dsh-shell-policy/api/shells` | body `{shells}`；`normalizeEntries` 归一化 → `validateEntriesForSave` 校验（≤16、名称唯一、`run_code` 保留、路径与 PATH 目录必须绝对、启动参数引号闭合）→ `settings.mutate(entryId, [{op:'set', path:['shells'], value}])`；不合法 400、落盘失败 500，均带原因（[host/api.ts](../src/host/api.ts)） |
+| `POST /dsh-shell-policy/api/detect` | body `{name, path}` → 走 `resolveShellPath` 返回 `{ok, path}`（`path` 是文件名时在 PATH 里找；留空时按家族探测；未找到时 `path: ''`）（[host/api.ts](../src/host/api.ts)） |
+| `POST /dsh-shell-policy/api/defaults` | body `{name, path, args}` → 归一化后调 [`defaultToolDescription()`](../src/host/shell-args.ts) 返回 `{ok, description}`；面板「新建条目预填」与「重置为默认」都打这个接口，模板只在 host 存在一份（[host/api.ts](../src/host/api.ts)） |
+| `POST /dsh-shell-policy/api/preferred` | 旧客户端兼容：写 `preferred`（auto \| bash \| pwsh）（[host/api.ts](../src/host/api.ts)） |
+| `POST /dsh-shell-policy/api/bashpath` | 旧客户端兼容：写 `bashPath`（[host/api.ts](../src/host/api.ts)） |
 | 其它 | 404 JSON |
 
-实现细节：请求体经 [`readJsonBody()`](../src/index.ts#L535) 手写 `req.on('data'/'end'/'error')` 拼接 + `JSON.parse`（空体按 `{}`）；`settings` / entry id 缺失由 [`writeSettings()`](../src/index.ts#L946) 返回原因（500）；响应统一 `content-type: application/json; charset=utf-8`。
+实现细节：请求体经 [`readJsonBody()`](../src/host/api.ts) 手写 `req.on('data'/'end'/'error')` 拼接 + `JSON.parse`（空体按 `{}`）；`settings` / entry id 缺失由 [`writeSettings()`](../src/host/api.ts) 返回原因（500）；响应统一 `content-type: application/json; charset=utf-8`。
 
 > 之所以自建 API：**settings 的 client 端 RPC 有 apiproxy allowlist（`WEB_SETTINGS_NAMESPACES`）**，本插件的 namespace/entry 不在其中，浏览器侧 `settingsScope` 拿不到。host 端仍走官方 `settings` 服务，保证持久化语义。
 
-### 4.8 非 Windows 行为（[src/index.ts](../src/index.ts#L1107)）
+### 4.8 非 Windows 行为（[host/apply.ts](../src/host/apply.ts)）
 
-注册完状态 API 后**直接 return**：不注册工具、不裁剪提示词、不加引导 section（Linux/macOS 上 DSH 官方 bash 工具已可用）。此时 `/status` 返回 `supported:false`，`entries` 按配置给出静态视图（`resolvedPath:''`、`registered:false`，见 [`statusView()`](../src/index.ts#L904)），且 `migrated` 恒为 false（迁移只在 Windows 产生条目）。
+注册完状态 API 后**直接 return**：不注册工具、不裁剪提示词、不加引导 section（Linux/macOS 上 DSH 官方 bash 工具已可用）。此时 `/status` 返回 `supported:false`，`entries` 按配置给出静态视图（`resolvedPath:''`、`registered:false`，见 [`statusView()`](../src/host/policy.ts)），且 `migrated` 恒为 false（迁移只在 Windows 产生条目）。
 
 ### 4.9 提示词面
 
@@ -299,29 +334,41 @@ ctx.on('system-prompt/assemble', async (_a, _c, next) => {
 })
 ```
 
-- waterfall 事件：**必须先 `await next()`** 再裁剪（[src/index.ts](../src/index.ts#L1133-L1142)）。
-- **只要有本插件工具注册成功，就隐藏 DSH 内置 `bash`/`pwsh`**（[`BUILT_IN_SHELL_TOOLS`](../src/index.ts#L59)）——内置工具在 preset 层无法运行时注销，只能靠过滤隐藏；名字与内置冲突的条目本来就注册失败（见 4.4），`!ours.has(toolName)` 只是避免把同名条目一起裁掉。
+- waterfall 事件：**必须先 `await next()`** 再裁剪（[host/apply.ts](../src/host/apply.ts)）。
+- **只要有本插件工具注册成功，就隐藏 DSH 内置 `bash`/`pwsh`**（[`BUILT_IN_SHELL_TOOLS`](../src/host/apply.ts)）——内置工具在 preset 层无法运行时注销，只能靠过滤隐藏；名字与内置冲突的条目本来就注册失败（见 4.4），`!ours.has(toolName)` 只是避免把同名条目一起裁掉。
 - 全部条目停用 / 不可用时 `registeredNames` 为空 → 不裁剪，回到 DSH 原始工具面。
-- 引导文本（[src/index.ts](../src/index.ts#L1145-L1149)）：`systemPrompt.section({name:'shell-policy', order:104, text: () => guidanceText()})`。[`guidanceText()`](../src/index.ts#L910) 列出已注册工具，并按 `primary`（缺省取第一个）指明优先使用；没有注册任何工具时返回空串。sections 按会话快照，新会话才看到新文本。
+- 引导文本（[host/apply.ts](../src/host/apply.ts)）：`systemPrompt.section({name:'shell-policy', order:104, text: () => guidanceText()})`。[`guidanceText()`](../src/host/policy.ts) 列出已注册工具，并按 `primary`（缺省取第一个）指明优先使用；没有注册任何工具时返回空串。sections 按会话快照，新会话才看到新文本。
 
 ### 4.10 自动表单与卸载清理
 
-- `settings.configure({auto:true})`（[src/index.ts](../src/index.ts#L1114-L1121)）：声明由 Config schema 自动生成配置页（当前客户端不消费该标记）；用 `try/catch` 吞掉旧版本无此方法的情况。
-- 最后调用 `applyPolicy()`（[src/index.ts](../src/index.ts#L1124)）让策略立即生效。
-- `ctx.effect(() => () => { disposeAll() }, '…: shell tool cleanup')`（[src/index.ts](../src/index.ts#L1153-L1155)）保证卸载时注销全部动态工具。
+- `settings.configure({auto:true})`（[host/apply.ts](../src/host/apply.ts)）：声明由 Config schema 自动生成配置页（当前客户端不消费该标记）；用 `try/catch` 吞掉旧版本无此方法的情况。
+- 最后调用 `applyPolicy()`（[host/apply.ts](../src/host/apply.ts)）让策略立即生效。
+- `ctx.effect(() => () => { disposeAll() }, '…: shell tool cleanup')`（[host/apply.ts](../src/host/apply.ts)）保证卸载时注销全部动态工具。
 
-## 5. Client 侧详解（[src/client/index.ts](../src/client/index.ts)）
+## 5. Client 侧详解（[client/index.ts](../src/client/index.ts)）
 
-### 5.1 注册面（[`apply()`](../src/client/index.ts#L1073)）
+`src/client/index.ts` 只保留 `inject` 与槽位注册（`apply`），其余按职责拆在 `src/client/`：
+
+| 模块 | 职责 |
+| --- | --- |
+| [client/card.ts](../src/client/card.ts) | `ShellPolicyCard` 容器：状态、请求、视图切换与滚动保持 |
+| [client/entry-row.ts](../src/client/entry-row.ts) | `EntryRow`：折叠态条目行（展示组件） |
+| [client/entry-detail.ts](../src/client/entry-detail.ts) | `EntryDetail`：单条目配置界面（展示组件） |
+| [client/validation.ts](../src/client/validation.ts) | 保存前预校验与名称推导（host 规则的 client 副本） |
+| [client/styles.ts](../src/client/styles.ts) | 全部内联样式对象 |
+| [client/icons.ts](../src/client/icons.ts) | `ChevronIcon` |
+| [client/types.ts](../src/client/types.ts) | 类型与常量 |
+
+### 5.1 注册面（[`apply()`](../src/client/index.ts)）
 
 | 槽位 | 位置 | 参数 | 状态 |
 | --- | --- | --- | --- |
-| `plugins.bundle.config` | [src/client/index.ts](../src/client/index.ts#L1077-L1084) | `name`（=槽位名）、`key:'dsh-windows-shell-policy'`、`label`（「Shell 工具」）、`inject:()=>({remote})` | **0.2.0 正式入口**，渲染在插件管理页的插件详情页内（`view:'page'`） |
-| `settings.plugin.item` | [src/client/index.ts](../src/client/index.ts#L1088-L1097) | `name`、`id`、`key`、`order:5`、`label`、`inject` | 0.1.x 兼容；0.2.0 已删该槽位，`slots.inject` 对未声明槽位不执行回调，**无副作用** |
+| `plugins.bundle.config` | [client/index.ts](../src/client/index.ts) | `name`（=槽位名）、`key:'dsh-windows-shell-policy'`、`label`（「Shell 工具」）、`inject:()=>({remote})` | **0.2.0 正式入口**，渲染在插件管理页的插件详情页内（`view:'page'`） |
+| `settings.plugin.item` | [client/index.ts](../src/client/index.ts) | `name`、`id`、`key`、`order:5`、`label`、`inject` | 0.1.x 兼容；0.2.0 已删该槽位，`slots.inject` 对未声明槽位不执行回调，**无副作用** |
 
-`export const inject = ['slots', 'remote']`（[src/client/index.ts](../src/client/index.ts#L30)）—— 用 `ctx.slots` / `ctx.remote` 而不声明注入会直接报错。
+`export const inject = ['slots', 'remote']`（[client/index.ts](../src/client/index.ts)）—— 用 `ctx.slots` / `ctx.remote` 而不声明注入会直接报错。
 
-### 5.2 组件 `ShellPolicyCard`（[src/client/index.ts](../src/client/index.ts#L572-L1071)）
+### 5.2 组件 `ShellPolicyCard`（[client/card.ts](../src/client/card.ts)）
 
 **三种视图**（由 `props.view` 决定）：
 
@@ -331,36 +378,36 @@ ctx.on('system-prompt/assemble', async (_a, _c, next) => {
 | `'page'` | 0.2.0 bundle 配置页：`pageStyle` 容器 + 两级界面（条目列表 ⇄ 单条目配置界面） |
 | 未指定 | 0.1.x 折叠卡片：头部 `button`（`aria-expanded` + chevron 旋转 + `dirty` 时「未保存」胶囊）+ 展开 body（内部同样是列表 ⇄ 配置界面两级） |
 
-**两级界面（v0.1.1）**：列表里的条目一律**折叠成一行**——只有条目名（只读，[`displayName()`](../src/client/index.ts#L523)：**显示名 `label` 优先**，留空回落到工具名 / 可执行文件名推导并以弱化色显示；显示名与工具名不同时其后补一个弱化的工具名，说明模型看到的是哪个名字）、「启用」checkbox、「默认」radio，以及行尾的「配置」按钮；显示名、工具名、可执行文件路径（含「探测」）、工具提示词、沙箱完全权限与「删除」全部收进该条目**单独的配置界面**（点「配置」进入，点「‹ 返回列表」退出）。N 个条目因此只占 N 行，不再每条撑满屏幕。行上仅在有问题时多一个 `!` 圆点（[`entryWarning()`](../src/client/index.ts#L797)：客户端校验问题优先，其次是运行时 `error` / 未注册），原因放在 `title` 悬停文本里——避免折叠后「条目失效只能靠展开面板才知道」（§9.2 第 1 条）彻底不可见。`editingId` 为 `null` 即列表视图；被编辑条目从当前条目表消失（外部改写）时自动回落到列表（[src/client/index.ts](../src/client/index.ts#L993-L994)）。
+**两级界面（v0.1.1）**：列表里的条目一律**折叠成一行**——只有条目名（只读，[`displayName()`](../src/client/validation.ts)：**显示名 `label` 优先**，留空回落到工具名 / 可执行文件名推导并以弱化色显示；显示名与工具名不同时其后补一个弱化的工具名，说明模型看到的是哪个名字）、「启用」checkbox、「默认」radio，以及行尾的「配置」按钮；显示名、工具名、可执行文件路径（含「探测」）、工具提示词、沙箱完全权限与「删除」全部收进该条目**单独的配置界面**（点「配置」进入，点「‹ 返回列表」退出）。N 个条目因此只占 N 行，不再每条撑满屏幕。行上仅在有问题时多一个 `!` 圆点（[`entryWarning()`](../src/client/card.ts)：客户端校验问题优先，其次是运行时 `error` / 未注册），原因放在 `title` 悬停文本里——避免折叠后「条目失效只能靠展开面板才知道」（§9.2 第 1 条）彻底不可见。`editingId` 为 `null` 即列表视图；被编辑条目从当前条目表消失（外部改写）时自动回落到列表（[client/card.ts](../src/client/card.ts)）。
 
-**滚动位置保持（v0.1.1，需求「切界面后页面滚动进度丢失」）**：视图切换会改变面板高度，内容变短时浏览器会把 `scrollTop` 夹到新的上限，页面一长「滚动进度」就丢。做法是三条一起上：① [`openEntryConfig()`](../src/client/index.ts#L629) 在离开列表前把**滚动容器与 scrollTop/scrollLeft** 记进 `listScroll` ref，[`backToList()`](../src/client/index.ts#L638) 之后由 [`useLayoutEffect`](../src/client/index.ts#L643)（`[editingId]`，DOM 更新后、绘制前）原样写回；② 同一时刻把列表视图的 `offsetHeight` 记进 `listHeight`，配置界面容器用 `minHeight + boxSizing:'border-box'` 兜底，**页面高度不缩水 → 浏览器不会夹取**，返回时的高度也与离开时一致，恢复是精确的；③ 进入配置界面时把卡片顶部对齐滚动视口顶部（留 8px），避免用户落在单条目卡片的中段。滚动容器由 [`findScroller()`](../src/client/index.ts#L609) 从面板根节点往上找第一个 `overflow-y:auto/scroll` 且真正可滚的祖先，找不到就用 `document.scrollingElement`（面板在插件详情页里的滚动容器由宿主决定，不能写死 window）。`rootRef` 也挂在 page 视图的容器上。
+**滚动位置保持（v0.1.1，需求「切界面后页面滚动进度丢失」）**：视图切换会改变面板高度，内容变短时浏览器会把 `scrollTop` 夹到新的上限，页面一长「滚动进度」就丢。做法是三条一起上：① [`openEntryConfig()`](../src/client/card.ts) 在离开列表前把**滚动容器与 scrollTop/scrollLeft** 记进 `listScroll` ref，[`backToList()`](../src/client/card.ts) 之后由 [`useLayoutEffect`](../src/client/card.ts)（`[editingId]`，DOM 更新后、绘制前）原样写回；② 同一时刻把列表视图的 `offsetHeight` 记进 `listHeight`，配置界面容器用 `minHeight + boxSizing:'border-box'` 兜底，**页面高度不缩水 → 浏览器不会夹取**，返回时的高度也与离开时一致，恢复是精确的；③ 进入配置界面时把卡片顶部对齐滚动视口顶部（留 8px），避免用户落在单条目卡片的中段。滚动容器由 [`findScroller()`](../src/client/card.ts) 从面板根节点往上找第一个 `overflow-y:auto/scroll` 且真正可滚的祖先，找不到就用 `document.scrollingElement`（面板在插件详情页里的滚动容器由宿主决定，不能写死 window）。`rootRef` 也挂在 page 视图的容器上。
 
 **状态与数据流**：
 
-- `load()` → `fetch('/dsh-shell-policy/api/status')`，失败置 `null`（[src/client/index.ts](../src/client/index.ts#L587)）。
-- `useEffect` 里首次 `load()`，并订阅 `remote.$on('settings/document-updated', load)` 实现**外部写入后自动刷新**（[src/client/index.ts](../src/client/index.ts#L594-L599)）；返回退订函数。
-- **staged 编辑**：`draft` 为 `null` 表示「未改动」，`saved = status.entries.map(toDraft)`、`entries = draft ?? saved`、`dirty = draft !== null`；`problems` 逐条目预校验，`blocked = !dirty || saving || hasProblem`（[src/client/index.ts](../src/client/index.ts#L601-L606)）。
-- `update()` / `setPrimary()`（单选，其余条目清除 primary）/ `addEntry()`（id 用时间戳 + 随机串；新增后 `openEntryConfig` 直接进它的配置界面，然后 `probe` → [`fillDefaultDescription()`](../src/client/index.ts#L731) **把默认模板预填进「工具提示词」**）/ `removeEntry()`（至少保留 1 条；删除后 `editingId` 置空回到列表）（[src/client/index.ts](../src/client/index.ts#L671-L701)）。
-- `probe(index, entry)` → `POST /detect`（body `{name, path}`）；命中则回填 `path`、名称为空时用 [`deriveName()`](../src/client/index.ts#L500) 推导，**并返回探测后的条目对象**供新建流程接着取默认提示词；未命中写 `notice`「未探测到可执行文件，请手动填写路径」。
-- `fillDefaultDescription(index, entry)` → `POST /defaults`（body `{name, path, args}`）把返回的 `description` 写进草稿：新建条目预填与配置界面的「重置为默认」共用它，**模板不在 client 复制**（[src/client/index.ts](../src/client/index.ts#L731)）。
-- `save()` → `POST /shells` 整表提交（条目字段逐个映射）；`ok !== true` 抛错 → 「保存失败：…」；成功后清空草稿、退出配置界面并 `load()`（[src/client/index.ts](../src/client/index.ts#L747)）。
-- `discard()` 清空草稿与失败态，并退出配置界面（[src/client/index.ts](../src/client/index.ts#L779)）。
+- `load()` → `fetch('/dsh-shell-policy/api/status')`，失败置 `null`（[client/card.ts](../src/client/card.ts)）。
+- `useEffect` 里首次 `load()`，并订阅 `remote.$on('settings/document-updated', load)` 实现**外部写入后自动刷新**（[client/card.ts](../src/client/card.ts)）；返回退订函数。
+- **staged 编辑**：`draft` 为 `null` 表示「未改动」，`saved = status.entries.map(toDraft)`、`entries = draft ?? saved`、`dirty = draft !== null`；`problems` 逐条目预校验，`blocked = !dirty || saving || hasProblem`（[client/card.ts](../src/client/card.ts)）。
+- `update()` / `setPrimary()`（单选，其余条目清除 primary）/ `addEntry()`（id 用时间戳 + 随机串；新增后 `openEntryConfig` 直接进它的配置界面，然后 `probe` → [`fillDefaultDescription()`](../src/client/card.ts) **把默认模板预填进「工具提示词」**）/ `removeEntry()`（至少保留 1 条；删除后 `editingId` 置空回到列表）（[client/card.ts](../src/client/card.ts)）。
+- `probe(index, entry)` → `POST /detect`（body `{name, path}`）；命中则回填 `path`、名称为空时用 [`deriveName()`](../src/client/validation.ts) 推导，**并返回探测后的条目对象**供新建流程接着取默认提示词；未命中写 `notice`「未探测到可执行文件，请手动填写路径」。
+- `fillDefaultDescription(index, entry)` → `POST /defaults`（body `{name, path, args}`）把返回的 `description` 写进草稿：新建条目预填与配置界面的「重置为默认」共用它，**模板不在 client 复制**（[client/card.ts](../src/client/card.ts)）。
+- `save()` → `POST /shells` 整表提交（条目字段逐个映射）；`ok !== true` 抛错 → 「保存失败：…」；成功后清空草稿、退出配置界面并 `load()`（[client/card.ts](../src/client/card.ts)）。
+- `discard()` 清空草稿与失败态，并退出配置界面（[client/card.ts](../src/client/card.ts)）。
 
-**控件**（`controls`，[src/client/index.ts](../src/client/index.ts#L996-L1034)）：
+**控件**（`controls`，[client/card.ts](../src/client/card.ts)）：
 
 1. 状态行：`registerError` 存在时红字显示（按条目汇总的错误），否则显示状态摘要（未注册任何工具 / 已注册工具列表；`migrated === true` 时附加「当前条目由旧配置迁移，保存后写入配置」）。
-2. 条目列表（[`entryRow()`](../src/client/index.ts#L809)）：每行 = 条目名（只读 `<span>`，留空且路径也空时显示「未命名」，`title` 带说明）+ 仅在有问题时的 `!` 圆点 +「启用」checkbox +「默认」radio（title 说明用途，未启用时禁用）+「配置」按钮。
-3. 单条目配置界面（[`entryDetail()`](../src/client/index.ts#L863)）：头部 =「‹ 返回列表」+「配置：<显示名>」+ 弹性 spacer +「删除」（仅剩 1 条时禁用）；主体 = 「显示名」输入框（占位「留空用工具名；只在面板里区分条目（例如 Git Bash / Cygwin）」，提示行说明它只影响面板显示、模型看到的仍是工具名）+「工具名」输入框（占位「留空按可执行文件名推导（pwsh 会改名为 powershell）」+ 一行「模型看到的工具名：<effectiveName>」提示）+「可执行文件」输入框与「探测」按钮同排（占位「绝对路径，或只填文件名（如 bash.exe，在 PATH 里查找）；留空自动探测」）+「工具提示词」textarea（3 行；标签行右侧是「重置为默认」按钮，调 `/defaults` 重新生成）+「沙箱完全权限」checkbox（文案说明跳过文件沙箱、不再逐次审批）+「启动参数」输入框（模板，占位「留空用默认：-c {command}（bash）/ -NoLogo -NoProfile -NonInteractive -Command {command}（pwsh）」，提示行说明 `{command}` 会被替换成实际命令、想换掉 `-c` 就改这里）；底部按需显示客户端问题（红字）、运行时状态（未编辑时显示 `运行时已生效：<resolvedPath>` / 未生效 + `error`）与探测 `notice`。
+2. 条目列表（[`entryRow()`](../src/client/entry-row.ts)）：每行 = 条目名（只读 `<span>`，留空且路径也空时显示「未命名」，`title` 带说明）+ 仅在有问题时的 `!` 圆点 +「启用」checkbox +「默认」radio（title 说明用途，未启用时禁用）+「配置」按钮。
+3. 单条目配置界面（[`entryDetail()`](../src/client/entry-detail.ts)）：头部 =「‹ 返回列表」+「配置：<显示名>」+ 弹性 spacer +「删除」（仅剩 1 条时禁用）；主体 = 「显示名」输入框（占位「留空用工具名；只在面板里区分条目（例如 Git Bash / Cygwin）」，提示行说明它只影响面板显示、模型看到的仍是工具名）+「工具名」输入框（占位「留空按可执行文件名推导（pwsh 会改名为 powershell）」+ 一行「模型看到的工具名：<effectiveName>」提示）+「可执行文件」输入框与「探测」按钮同排（占位「绝对路径，或只填文件名（如 bash.exe，在 PATH 里查找）；留空自动探测」）+「工具提示词」textarea（3 行；标签行右侧是「重置为默认」按钮，调 `/defaults` 重新生成）+「沙箱完全权限」checkbox（文案说明跳过文件沙箱、不再逐次审批）+「启动参数」输入框（模板，占位「留空用默认：-c {command}（bash）/ -NoLogo -NoProfile -NonInteractive -Command {command}（pwsh）」，提示行说明 `{command}` 会被替换成实际命令、想换掉 `-c` 就改这里）；底部按需显示客户端问题（红字）、运行时状态（未编辑时显示 `运行时已生效：<resolvedPath>` / 未生效 + `error`）与探测 `notice`。
 4. 条目为空时显示空态提示。
 5. footer（列表与配置界面共用）：失败提示 + 弹性 spacer +「添加 shell」（≥16 条禁用）/「放弃」（未改动或保存中禁用）/「保存」（未改动、保存中或存在客户端问题时禁用）。
 
-**客户端预校验**（[`entryProblem()`](../src/client/index.ts#L533)）：启用条目间工具名重复（文案里用对方的显示名标识是哪一条）、`run_code` 保留名、`path` 要么绝对要么纯文件名、启动参数模板必须含 `{command}` 且引号闭合。后两项由 client 自己的 [`isBareExecutableName()`](../src/client/index.ts#L448) / [`argTemplateProblem()`](../src/client/index.ts#L453) / [`parseArgs()`](../src/client/index.ts#L464) 复刻 host 规则（client bundle 与 host 各自独立，无法共享代码）——**改 host 规则时这几处要同步**。[`effectiveName()`](../src/client/index.ts#L512) 与 host 的 sanitize 规则一致。
+**客户端预校验**（[`entryProblem()`](../src/client/validation.ts)）：启用条目间工具名重复（文案里用对方的显示名标识是哪一条）、`run_code` 保留名、`path` 要么绝对要么纯文件名、启动参数模板必须含 `{command}` 且引号闭合。后两项由 client 自己的 [`isBareExecutableName()`](../src/client/validation.ts) / [`argTemplateProblem()`](../src/client/validation.ts) / [`parseArgs()`](../src/client/validation.ts) 复刻 host 规则（client bundle 与 host 各自独立，无法共享代码）——**改 host 规则时这几处要同步**。[`effectiveName()`](../src/client/validation.ts) 与 host 的 sanitize 规则一致。
 
 ### 5.3 样式约定
 
-- 全部走**内联样式对象**，颜色/背景用官方 CSS 变量 `--dsw-alias-*`（`border-l2`、`bg-layer-2/3`、`label-primary/secondary/tertiary/dimmed/error`、`bg-module-platform`），与官方 PluginCard / TerminalBlock 视觉同构（样式对象见 [src/client/index.ts](../src/client/index.ts#L80-L442)；v0.1.1 新增折叠行 `row*`、问题圆点 `warnBadgeStyle`、配置界面 `detail*` / `inlineRowStyle` / `pathInputStyle` / `wrapLabelStyle`）。
-- **必坑**：React 内联样式下 `border` 简写会让 CSS 变量在拆解时丢失（`border-color` 回落 `currentColor` → 黑边），因此一律用 `borderWidth`/`borderStyle`/`borderColor`（以及 `borderTop*`）长写（[src/client/index.ts](../src/client/index.ts#L80-L90)、[conventions.md](../docs/conventions.md)）。
-- chevron 用官方 `IconChevronDownOutline14` 的等价 SVG（`fill='currentColor'`，14×14），`ChevronIcon` 见 [src/client/index.ts](../src/client/index.ts#L146)；展开时 `rotate(180deg)`。
+- 全部走**内联样式对象**，颜色/背景用官方 CSS 变量 `--dsw-alias-*`（`border-l2`、`bg-layer-2/3`、`label-primary/secondary/tertiary/dimmed/error`、`bg-module-platform`），与官方 PluginCard / TerminalBlock 视觉同构（样式对象见 [client/styles.ts](../src/client/styles.ts)；v0.1.1 新增折叠行 `row*`、问题圆点 `warnBadgeStyle`、配置界面 `detail*` / `inlineRowStyle` / `pathInputStyle` / `wrapLabelStyle`）。
+- **必坑**：React 内联样式下 `border` 简写会让 CSS 变量在拆解时丢失（`border-color` 回落 `currentColor` → 黑边），因此一律用 `borderWidth`/`borderStyle`/`borderColor`（以及 `borderTop*`）长写（[client/styles.ts](../src/client/styles.ts)、[conventions.md](../docs/conventions.md)）。
+- chevron 用官方 `IconChevronDownOutline14` 的等价 SVG（`fill='currentColor'`，14×14），`ChevronIcon` 见 [client/icons.ts](../src/client/icons.ts)；展开时 `rotate(180deg)`。
 - 组件用 `createElement` 手写而非 JSX —— 免去 tsx/jsx 构建配置。
 
 ## 6. 构建与发布
@@ -488,19 +535,20 @@ DSH_CHECKOUT=E:/DSHSource/current npm run typecheck
 | 本文档 | **结构更正（2026-10-09）**：仓库根描述与目录树、全部相对链接（原文 199 处嵌套前缀）、失效的 `#L` 锚点与 `[#Lxx]` 标签；详见 §12。**同日「开发经验复核」**：§2.2 元数据、§6 构建与发布、§7.3 槽位必坑、§8 环境现状、§9.2/§9.3 注意点、§10 开发指引按当前代码与本机实测复核（见文档头注） |
 | [README.md](../README.md) / [README.en.md](../README.en.md) | **已更新（2026-10-09）**：新增「项目上下文文档」入口表 |
 | [src/index.ts](../src/index.ts) 顶部注释 | **已同步**：改述为条目模型；[lib/types/index.d.ts](../lib/types/index.d.ts) 是构建产物，重新构建后才会带上新注释 |
+| [src/host/](../src/host/) / [src/client/](../src/client/) | **模块拆分（2026-10-09）**：host 与 client 单文件按职责拆为多模块，全文 `#L` 锚点改为模块文件链接；详见 §13 |
 
 ### 9.2 代码级注意点 / 潜在缺陷
 
 1. **条目错误只对面板可见**：条目注册失败（未找到可执行文件 / 工具名被占用 / 重名 / 注册抛错）只写进 `EntryStatus.error` 并经 `/status` 暴露；模型侧只看到「注册成功的工具 + 被隐藏的内置 shell」，没有任何错误提示——**用户要打开面板才知道某条目没生效**。
-2. **条目运行时状态改为按需重算（v0.1.1 修复）**：`status` / `registeredNames` 存在闭包快照里（[src/index.ts](../src/index.ts#L566-L569)），原先只在 `applyPolicy()` 里刷新。而 DSH 对**只有 volatile 字段变化**的 entry 更新不重挂插件：`vendor/loader/src/config/entry.ts` 的 `_commitVolatile()` 原地 `updateVolatile` 已有引用并发 `loader/volatile-update`，`apply` 不再被调用。因此面板保存后必须自己重算，否则工具注册与 `/status` 停在旧快照（表现：保存后修改「消失」）。现在由 `reconcile()`（幂等，按条目签名比对）在 `loader/volatile-update`、`/status`、`system-prompt/assemble` 三处触发。**升级 DSH 时需回归验证。**
+2. **条目运行时状态改为按需重算（v0.1.1 修复）**：`status` / `registeredNames` 存在闭包快照里（[host/policy.ts](../src/host/policy.ts)），原先只在 `applyPolicy()` 里刷新。而 DSH 对**只有 volatile 字段变化**的 entry 更新不重挂插件：`vendor/loader/src/config/entry.ts` 的 `_commitVolatile()` 原地 `updateVolatile` 已有引用并发 `loader/volatile-update`，`apply` 不再被调用。因此面板保存后必须自己重算，否则工具注册与 `/status` 停在旧快照（表现：保存后修改「消失」）。现在由 `reconcile()`（幂等，按条目签名比对）在 `loader/volatile-update`、`/status`、`system-prompt/assemble` 三处触发。**升级 DSH 时需回归验证。**
 3. **`fullAccess` 与运行上下文不一致**：session 沙箱策略仍是 `workspace-write` 时，运行时上下文照旧告诉模型「写入受限于工作区」，而 fullAccess 条目的命令实际不受限制；这是刻意的 per-tool 选择，但两者并存时模型可能误判。
 4. **探测候选仍不完整**：已覆盖 `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`、`Git\usr\bin\bash.exe`、PATH 按名查找；仍缺 scoop shim 特判与 WSL。本机 `PATH` 里的 `bash` 是 scoop shim，只有在 Git 安装路径都没命中时才会被用到。
 5. **不加载登录 / 交互 profile**：Bash 家族固定 `-c`（无 `-l`/`-i`），PowerShell 家族固定 `-NoProfile -NonInteractive`，因此 `.bashrc` / `$PROFILE` 里的环境不会生效。这是有意的（与官方 shell 工具一致），但值得在文档里说清。
 6. **HTTP API 无鉴权**：`POST /shells`、`/detect`、`/preferred`、`/bashpath` 只做形状与值域校验（条目数 ≤16、名称唯一、路径绝对、字段长度上限），请求体经 `readJsonBody()` 手写拼接（无体积上限）；依赖 `webServer` 自身的访问控制（web 端有认证，桌面端需 token）。跨源 / 本地其它进程若能访问该端口即可改配置。
-7. **条目 error 直接透出原始错误文本**：注册抛错时写成 `工具注册失败：${String(error)}`（[src/index.ts](../src/index.ts#L894)），面板会显示内部路径 / 堆栈首行，信息量大但对外观感一般。
-8. **升级提示依赖注册时快照**：`escalationModes` 在 `buildTool()` 里按条目的 `fullAccess` 与组合能力算一次并闭包捕获（[src/index.ts](../src/index.ts#L584-L587)）；组合变化后需重新 apply 才更新（与第 2 条同源风险）。
+7. **条目 error 直接透出原始错误文本**：注册抛错时写成 `工具注册失败：${String(error)}`（[host/policy.ts](../src/host/policy.ts)），面板会显示内部路径 / 堆栈首行，信息量大但对外观感一般。
+8. **升级提示依赖注册时快照**：`escalationModes` 在 `buildTool()` 里按条目的 `fullAccess` 与组合能力算一次并闭包捕获（[host/tool.ts](../src/host/tool.ts)）；组合变化后需重新 apply 才更新（与第 2 条同源风险）。
 9. **有本地集成测试，但仍无 CI / lint / format 配置**：`tests/host-harness.mjs`（61 项断言，真实 spawn，需完全权限）覆盖 host 侧的条目模型与执行链路，`tests/executable-and-args.mjs`（33 项断言，spawn 用桩，沙箱内可跑）覆盖可执行文件解析（绝对路径 / 文件名走 PATH）、启动参数模板与默认提示词；仓库内仍没有 workflow / oxlint 配置（DSH 主仓库的 `lefthook.yml` / `.oxlintrc.json` 不在本仓库）。
-10. **硬编码中文 UI 文案**：客户端校验与状态文案均为中文字面量（如 [src/client/index.ts](../src/client/index.ts#L533)、[src/client/index.ts](../src/client/index.ts#L785-L794)），host 侧 API 错误同样是中文（[src/index.ts](../src/index.ts#L235-L235)），无 i18n 层；而 DSH client 是有 locale 服务的。
+10. **硬编码中文 UI 文案**：客户端校验与状态文案均为中文字面量（如 [client/validation.ts](../src/client/validation.ts)、[client/card.ts](../src/client/card.ts)），host 侧 API 错误同样是中文（[host/config.ts](../src/host/config.ts)），无 i18n 层；而 DSH client 是有 locale 服务的。
 11. **运行期依赖曾用错包名（v0.1.0 的真实故障，v0.1.1 修复）**：`schemastery` / `cordis` 只是 `build.sh` 建立的编译期本地别名，`vendor/*` 的真实包名是 `@deepseek-ai/schemastery` / `@deepseek-ai/cordis`。插件从 GitHub 装进 `profiles/<name>/node_modules` 后，Node 的向上查找只在共享的 `~/.dsh/profiles/node_modules` 命中作用域名那一份 → 裸名 `ERR_MODULE_NOT_FOUND`，DSH 启动打印 `dsh-windows-shell-policy (dsh-windows-shell-policy): failed to import`，配置面板不出现。**新增任何非 `node:` 内建的 import 前，先确认用的是发布名。**
 
 ### 9.3 沙箱相关（2026-10-09 实测）
@@ -524,11 +572,11 @@ DSH_CHECKOUT=E:/DSHSource/current npm run typecheck
 
 | 目标 | 需要改的点 |
 | --- | --- |
-| **新增一个条目字段** | ① `ShellEntry` 接口 + `ShellEntrySchema`（[src/index.ts](../src/index.ts#L83-L137)）② `normalizeEntry()` 的读取与值域收敛（[src/index.ts](../src/index.ts#L178)）③ `validateEntriesForSave()` 的保存校验（[src/index.ts](../src/index.ts#L232)）④ client `EntryStatus` / `DraftEntry` + `toDraft()` + `save()` payload（`args` 就是这个流程的样板；旧 host 的 `/status` 没有新字段，所以 `EntryStatus` 里标可选并在 `toDraft()` 兜底成空串）⑤ `buildTool()` 消费新字段（`path` → `resolveShellPath()`，`args` → `argTemplate()` + `buildArgv()`）⑥ 面板控件加在 `entryDetail()` 里（`entryRow()` 只放名称/启用/默认）。`label`（显示名）是「只给人看」的字段样板：host 侧只进 `normalizeEntry` 与 `entryLabel()` 文案，client 侧只进面板显示与 `save()` payload，**不进工具名 / 工具提示词 / 执行链** |
-| **改策略生效逻辑** | 只动 [`applyPolicy()`](../src/index.ts#L863) 的逐条目循环（启用判定 / `entryProblem` / 注册）与 [`entryProblem()`](../src/index.ts#L841) 的原因集合；保持幂等守门、`disposeAll` 与按 id 的 disposer 语义 |
-| **改 shell 工具行为** | [`buildTool()`](../src/index.ts#L580) 里的 `description` / `parameters` / `output.schema` / `execute`；注意 `output.schema` 嵌套 object 必须 `additionalProperties:false`，且改动后要同步 `presentResult` 的解析预期与 `renderShellResult` 的标记顺序 |
-| **改提示词面** | `system-prompt/assemble` 的 `BUILT_IN_SHELL_TOOLS` 过滤集合（[src/index.ts](../src/index.ts#L59)）与 [`guidanceText()`](../src/index.ts#L910) 的文本 |
-| **改设置面板 UI** | [src/client/index.ts](../src/client/index.ts)：样式长写、CSS 变量、`page` / `summary` / 折叠三视图任一分支；条目列表行 = `entryRow()`，单条目配置界面 = `entryDetail()`（新增字段就加在这两处 + `save()` payload + host 侧模型） |
+| **新增一个条目字段** | ① `ShellEntry` 接口 + `ShellEntrySchema`（[host/config.ts](../src/host/config.ts)）② `normalizeEntry()` 的读取与值域收敛（[host/config.ts](../src/host/config.ts)）③ `validateEntriesForSave()` 的保存校验（[host/config.ts](../src/host/config.ts)）④ client `EntryStatus` / `DraftEntry` + `toDraft()` + `save()` payload（`args` 就是这个流程的样板；旧 host 的 `/status` 没有新字段，所以 `EntryStatus` 里标可选并在 `toDraft()` 兜底成空串）⑤ `buildTool()` 消费新字段（`path` → `resolveShellPath()`，`args` → `argTemplate()` + `buildArgv()`）⑥ 面板控件加在 `entryDetail()` 里（`entryRow()` 只放名称/启用/默认）。`label`（显示名）是「只给人看」的字段样板：host 侧只进 `normalizeEntry` 与 `entryLabel()` 文案，client 侧只进面板显示与 `save()` payload，**不进工具名 / 工具提示词 / 执行链** |
+| **改策略生效逻辑** | 只动 [`applyPolicy()`](../src/host/policy.ts) 的逐条目循环（启用判定 / `entryProblem` / 注册）与 [`entryProblem()`](../src/host/policy.ts) 的原因集合；保持幂等守门、`disposeAll` 与按 id 的 disposer 语义 |
+| **改 shell 工具行为** | [`buildTool()`](../src/host/tool.ts) 里的 `description` / `parameters` / `output.schema` / `execute`；注意 `output.schema` 嵌套 object 必须 `additionalProperties:false`，且改动后要同步 `presentResult` 的解析预期与 `renderShellResult` 的标记顺序 |
+| **改提示词面** | `system-prompt/assemble` 的 `BUILT_IN_SHELL_TOOLS` 过滤集合（[host/apply.ts](../src/host/apply.ts)）与 [`guidanceText()`](../src/host/policy.ts) 的文本 |
+| **改设置面板 UI** | [client/index.ts](../src/client/index.ts)：样式长写、CSS 变量、`page` / `summary` / 折叠三视图任一分支；条目列表行 = `entryRow()`，单条目配置界面 = `entryDetail()`（新增字段就加在这两处 + `save()` payload + host 侧模型） |
 | **发版** | `DSH_CHECKOUT=... bash scripts/build.sh` → 核对 `lib/` diff → 跑 `node tests/host-harness.mjs`（需完全权限）与 `node tests/executable-and-args.mjs`（沙箱内可跑）→ `npx tsc -p tsconfig.json --noEmit` 类型基线 → 提交 → `npm publish --ignore-scripts` → GitHub Release（ZIP：lib + cordis.patch.yml + package.json + LICENSE）→ 更新 README 徽章与 CHANGELOG |
 
 ### 10.2 建议的路线（按优先级）
@@ -544,75 +592,60 @@ DSH_CHECKOUT=E:/DSHSource/current npm run typecheck
 
 ## 11. 附录：符号索引
 
-> 行号锚点取自 v0.1.1 源码修订（`src/index.ts` 1155 行、`src/client/index.ts` 1098 行）；其余小节中的 `#L行号` 来自更早的 v0.1.0 梳理，插入少量代码（如 v0.1.1 的 `reconcile()`）后会整体漂移若干行。**跨版本引用请按符号名在源码中重新定位**；2026-10-09 结构更正时已逐条核对，其中有 4 处失配已就地修正（`bashCandidates`、`pwshCandidates`、`disposeAll` 的清理处、`entryRow`）。
+> 本节按**模块**组织（2026-10-09 模块拆分后）：符号所在文件即表格第二列；行号锚点已全部移除（源码增删不再影响文档）。跨版本引用请按符号名在对应模块内定位。
 
-### Host（[src/index.ts](../src/index.ts)）
+### Host（facade [src/index.ts](../src/index.ts) + [src/host/](../src/host/)）
 
-| 符号 | 行 | 职责 |
+| 符号 | 位置 | 职责 |
 | --- | --- | --- |
-| `name` / `inject` | [src/index.ts](../src/index.ts#L37-L38) | 插件名与注入声明 |
-| `PKG_NAME` | [src/index.ts](../src/index.ts#L41) | 包名常量（反查 entry id 用） |
-| `MAX_SHELL_ENTRIES` / `MAX_ARGS` / `BUILT_IN_SHELL_TOOLS` / `PWSH_PREAMBLE` | [src/index.ts](../src/index.ts#L44-L61) | 条目上限（16）、启动参数模板上限（1024）、内置 shell 工具名、PowerShell UTF-8 输出前缀 |
-| `resolveOwnEntryId` | [src/index.ts](../src/index.ts#L68) | 经 loader 反查 profile entry id |
-| `ShellEntry`（接口） | [src/index.ts](../src/index.ts#L83-L113) | 条目类型（`id/name/label/enabled/path/args/description/fullAccess/primary`；`path` 支持绝对路径或纯文件名） |
-| `Config`（接口 + schema） | [src/index.ts](../src/index.ts#L115-L143) | 配置类型与 schemastery schema（`shells` 数组 volatile） |
-| `unwrapVolatile` / `stringField` | [src/index.ts](../src/index.ts#L149-L157) | 解包 volatile 引用与字符串取值 |
-| `sanitizeToolName` / `deriveToolName` | [src/index.ts](../src/index.ts#L162-L171) | 工具名清洗与默认推导（`pwsh` → `powershell`） |
-| `normalizeEntry` / `normalizeEntries` | [src/index.ts](../src/index.ts#L178-L208) | 条目归一化（id 去重、字段截断、primary 唯一、上限 16） |
-| `entryLabel` | [src/index.ts](../src/index.ts#L226) | 面板/错误文案里的条目名（显示名优先，留空回落工具名） |
-| `validateEntriesForSave` | [src/index.ts](../src/index.ts#L232) | 保存前整表校验 |
-| `readConfig` | [src/index.ts](../src/index.ts#L254) | 取最新配置快照 |
-| `isPwshFamily` | [src/index.ts](../src/index.ts#L265) | 家族判定（`-Command` vs `-c`） |
-| `COMMAND_PLACEHOLDER` / `isBareExecutableName` / `executablePathProblem` | [src/index.ts](../src/index.ts#L271) | 启动参数占位符、`path` 是否为纯文件名、`path` 值域校验 |
-| `parseArgs` / `argTemplate` / `argTemplateProblem` | [src/index.ts](../src/index.ts#L288) | 参数文本解析、家族默认 / 自定义启动参数模板与校验（引号闭合 + 必须含 `{command}`） |
-| `resolveExecutableInPath` | [src/index.ts](../src/index.ts#L407) | 在进程 PATH 里按文件名查找可执行文件 |
-| `buildArgv` | [src/index.ts](../src/index.ts#L419) | 按启动参数模板构造 argv（`{command}` → 实际命令） |
-| `pathCandidates` / `bashCandidates` / `pwshCandidates` | [src/index.ts](../src/index.ts#L321-L372) | PATH 与家族探测候选（无扩展名的名字补 `.exe`） |
-| `defaultToolDescription` | [src/index.ts](../src/index.ts#L425) | 默认工具提示词（host 唯一来源：buildTool 回落 + `POST /defaults`） |
-| `resolveShellPath` | [src/index.ts](../src/index.ts#L391) | 解析条目的可执行文件（绝对路径 / 文件名走 PATH / 留空按家族探测） |
-| `EntryStatus` / `migrateLegacyEntries` | [src/index.ts](../src/index.ts#L448-L458) | 运行时状态形状与旧配置迁移 |
-| `renderShellResult` | [src/index.ts](../src/index.ts#L480) | 结果文本渲染（含标记） |
-| `parseExitStatus` | [src/index.ts](../src/index.ts#L504) | 从末尾拆 exit/signal 状态 |
-| `ShellToolArgs` / `AppContext` | [src/index.ts](../src/index.ts#L513-L532) | 工具参数与本地 webServer 服务面声明 |
-| `readJsonBody` / `collectDshEnv` | [src/index.ts](../src/index.ts#L535-L546) | 请求体读取与 `DSH_*` 环境收集 |
-| `currentEntries` | [src/index.ts](../src/index.ts#L560) | 配置条目，或旧配置迁移结果 |
-| `disposeAll` | [src/index.ts](../src/index.ts#L572) | 注销全部动态注册的工具 |
-| `buildTool` | [src/index.ts](../src/index.ts#L580) | 单个条目的工具定义 |
-| `execute` | [src/index.ts](../src/index.ts#L674) | shell 工具执行全链路（workdir → 沙箱 → argv → spawn） |
-| `presentCall` / `presentResult` | [src/index.ts](../src/index.ts#L820-L826) | 终端卡片展示与 exit pill 拆分 |
-| `entryProblem` | [src/index.ts](../src/index.ts#L841) | 条目不可注册的原因 |
-| `applyPolicy` | [src/index.ts](../src/index.ts#L863) | 策略状态机（逐条目注册 / 注销，幂等） |
-| `statusView` | [src/index.ts](../src/index.ts#L904) | `/status` 的条目运行时视图 |
-| `guidanceText` | [src/index.ts](../src/index.ts#L910) | 引导提示词文本（列出工具 + primary） |
-| API handler | [src/index.ts](../src/index.ts#L937-L1104) | status / shells / detect / **defaults** / preferred / bashpath |
-| 提示词裁剪 | [src/index.ts](../src/index.ts#L1133-L1142) | waterfall：有工具注册时隐藏内置 bash/pwsh |
-| 引导 section | [src/index.ts](../src/index.ts#L1145-L1149) | order 104 的 shell 策略文本（函数文本） |
+| `name` / `inject` | [src/index.ts](../src/index.ts) | 插件名与注入声明（facade） |
+| `PKG_NAME` / `resolveOwnEntryId` | [host/context.ts](../src/host/context.ts) | 包名常量、经 loader 反查 profile entry id |
+| `AppContext` | [host/context.ts](../src/host/context.ts) | 本地 webServer 服务面声明 + `JobKindMap.bash` 类型增强 |
+| `MAX_SHELL_ENTRIES` / `MAX_TOOL_NAME` / `MAX_LABEL` / `MAX_PATH` / `MAX_DESCRIPTION` / `MAX_ARGS` | [host/config.ts](../src/host/config.ts) | 条目上限（16）与各字段长度上限 |
+| `ShellEntry`（接口） | [host/config.ts](../src/host/config.ts) | 条目类型（`id/name/label/enabled/path/args/description/fullAccess/primary`） |
+| `Config`（接口 + schema） | [host/config.ts](../src/host/config.ts) | 配置类型与 schemastery schema（`shells` 数组 volatile） |
+| `unwrapVolatile` / `stringField` | [host/config.ts](../src/host/config.ts) | 解包 volatile 引用与字符串取值 |
+| `sanitizeToolName` / `deriveToolName` | [host/config.ts](../src/host/config.ts) | 工具名清洗与默认推导（`pwsh` → `powershell`） |
+| `normalizeEntry` / `normalizeEntries` | [host/config.ts](../src/host/config.ts) | 条目归一化（id 去重、字段截断、primary 唯一、上限 16） |
+| `entryLabel` | [host/config.ts](../src/host/config.ts) | 面板/错误文案里的条目名（显示名优先，留空回落工具名） |
+| `validateEntriesForSave` / `readConfig` / `migrateLegacyEntries` | [host/config.ts](../src/host/config.ts) | 保存前整表校验、最新配置快照、旧配置迁移 |
+| `PWSH_PREAMBLE` / `isPwshFamily` / `COMMAND_PLACEHOLDER` | [host/shell-args.ts](../src/host/shell-args.ts) | UTF-8 输出前缀、家族判定（`-Command` vs `-c`）、模板占位符 `{command}` |
+| `parseArgs` / `argTemplate` / `argTemplateProblem` / `buildArgv` | [host/shell-args.ts](../src/host/shell-args.ts) | 参数解析、家族默认/自定义模板与校验、argv 构造 |
+| `defaultToolDescription` | [host/shell-args.ts](../src/host/shell-args.ts) | 默认工具提示词（host 唯一来源：buildTool 回落 + `POST /defaults`） |
+| `isBareExecutableName` / `executablePathProblem` | [host/detect.ts](../src/host/detect.ts) | `path` 是否为纯文件名、`path` 值域校验 |
+| `pathCandidates` / `bashCandidates` / `pwshCandidates` | [host/detect.ts](../src/host/detect.ts) | PATH 与家族探测候选（无扩展名的名字补 `.exe`） |
+| `resolveShellPath` / `resolveExecutableInPath` | [host/detect.ts](../src/host/detect.ts) | 解析条目可执行文件、在 PATH 里按文件名查找 |
+| `BashResult` / `renderShellResult` | [host/result.ts](../src/host/result.ts) | 工具结果形状与文本渲染（含标记） |
+| `parseExitStatus` | [host/result.ts](../src/host/result.ts) | 从末尾拆 exit/signal 状态 |
+| `ShellToolArgs` / `buildTool` | [host/tool.ts](../src/host/tool.ts) | 工具参数与单个条目的工具定义 |
+| `execute` / `presentCall` / `presentResult` | [host/tool.ts](../src/host/tool.ts) | 执行全链路（workdir → 沙箱 → argv → spawn）与终端卡片 |
+| `collectDshEnv` | [host/tool.ts](../src/host/tool.ts) | 挑出 `DSH_*` 托管变量传给子进程 |
+| `EntryStatus` | [host/policy.ts](../src/host/policy.ts) | 条目运行时状态形状 |
+| `createShellPolicy` | [host/policy.ts](../src/host/policy.ts) | 策略状态机工厂（对外 5 个动作：reconcile / statusView / registeredNames / guidanceText / disposeAll） |
+| `disposeAll` / `entryProblem` / `applyPolicy` / `statusView` / `guidanceText` | [host/policy.ts](../src/host/policy.ts) | 注销工具、注册失败原因、逐条目注册/注销、`/status` 视图、引导文本 |
+| `readJsonBody` / `writeSettings` / `registerStatusApi` | [host/api.ts](../src/host/api.ts) | 请求体读取、settings 落盘、status / shells / detect / **defaults** / preferred / bashpath 路由 |
+| `apply` / `currentEntries` | [host/apply.ts](../src/host/apply.ts) | 插件装配、当前生效条目（或旧配置迁移结果） |
+| `BUILT_IN_SHELL_TOOLS` / 提示词裁剪 / 引导 section / settings form / 卸载清理 | [host/apply.ts](../src/host/apply.ts) | 内置 shell 名称、assemble 过滤、order 104 section、清理 |
 
-### Client（[src/client/index.ts](../src/client/index.ts)）
+### Client（[src/client/](../src/client/)）
 
-| 符号 | 行 | 职责 |
+| 符号 | 位置 | 职责 |
 | --- | --- | --- |
-| `inject` | [src/client/index.ts](../src/client/index.ts#L16) | `['slots','remote']` |
-| `MAX_ENTRIES` | [src/client/index.ts](../src/client/index.ts#L33) | 条目上限（与 host 一致，16） |
-| `EntryStatus` / `Status` / `DraftEntry` | [src/client/index.ts](../src/client/index.ts#L36-L76) | `/status` 响应、条目运行时视图与草稿形状 |
-| 样式对象 | [src/client/index.ts](../src/client/index.ts#L80-L442) | 条目行 / 表单 / 配置界面 / 按钮内联样式 |
-| `ChevronIcon` | [src/client/index.ts](../src/client/index.ts#L146) | 官方同款折叠箭头 |
-| `isBareExecutableName` / `argTemplateProblem` / `parseArgs`（client 侧副本） | [src/client/index.ts](../src/client/index.ts#L448) | 与 host 同规则的 `path` 值域与启动参数模板校验，仅用于保存前预校验（改 host 规则时要同步） |
-| `deriveName` / `effectiveName` / `entryProblem` / `toDraft` | [src/client/index.ts](../src/client/index.ts#L500-L552) | 名称推导、客户端预校验、状态转草稿（`toDraft` 对旧 host 缺字段兜底空串） |
-| `ShellPolicyCard` | [src/client/index.ts](../src/client/index.ts#L572-L1071) | 三视图配置组件（列表 ⇄ 单条目配置界面两级） |
-| `editingId`（state） | [src/client/index.ts](../src/client/index.ts#L580) | 正在配置的条目 id；`null` 表示列表视图 |
-| `rootRef` / `listScroll` / `listHeight`（state/ref） | [src/client/index.ts](../src/client/index.ts#L583-L585) | 面板根节点、离开列表时的滚动位置、列表视图高度（配置界面的 min-height 兜底） |
-| `findScroller` / `openEntryConfig` / `backToList` / `useLayoutEffect` | [src/client/index.ts](../src/client/index.ts#L609-L669) | 视图切换的滚动保持：定位滚动容器、记/还原 scrollTop、进入配置界面时对齐卡片顶部 |
-| `load` / `useEffect` | [src/client/index.ts](../src/client/index.ts#L587-L599) | 拉状态 + 文档变更订阅 |
-| `update` / `setPrimary` / `addEntry` / `removeEntry` | [src/client/index.ts](../src/client/index.ts#L671-L701) | 草稿编辑（新增/删除会切换配置界面） |
-| `probe` | [src/client/index.ts](../src/client/index.ts#L707) | `POST /detect`（`{name, path}`）填充路径，返回探测后的条目 |
-| `fillDefaultDescription` | [src/client/index.ts](../src/client/index.ts#L731) | `POST /defaults` 取 host 默认模板：新建预填 + 「重置为默认」 |
-| `save` / `discard` | [src/client/index.ts](../src/client/index.ts#L747-L779) | staged 提交与放弃（均退出配置界面） |
-| `displayName` / `entryWarning` | [src/client/index.ts](../src/client/index.ts#L523) / [src/client/index.ts](../src/client/index.ts#L797) | 折叠行显示名（显示名优先，留空回落工具名）、行内问题提示 |
-| `entryRow` | [src/client/index.ts](../src/client/index.ts#L808) | 折叠态条目行（显示名 + 弱化工具名 / 启用 / 默认 / 配置） |
-| `entryDetail` | [src/client/index.ts](../src/client/index.ts#L863) | 单条目配置界面（显示名 / 工具名 / 可执行文件 / 提示词+重置 / 沙箱权限 / 启动参数 / 删除） |
-| `editingEntry` / `controls` | [src/client/index.ts](../src/client/index.ts#L993-L1034) | 当前配置条目解析、状态行 +（列表│配置界面）+ footer |
-| `apply` | [src/client/index.ts](../src/client/index.ts#L1073) | 两个槽位注册 |
+| `inject` / `apply` | [client/index.ts](../src/client/index.ts) | `['slots','remote']` 与两个槽位注册 |
+| `MAX_ENTRIES` | [client/types.ts](../src/client/types.ts) | 条目上限（与 host 一致，16） |
+| `ClientContext` / `EntryStatus` / `Status` / `DraftEntry` | [client/types.ts](../src/client/types.ts) | 面板上下文、`/status` 响应、条目运行时视图与草稿形状 |
+| 样式对象（39 个） | [client/styles.ts](../src/client/styles.ts) | 条目行 / 表单 / 配置界面 / 按钮内联样式 |
+| `ChevronIcon` | [client/icons.ts](../src/client/icons.ts) | 官方同款折叠箭头 |
+| `COMMAND_PLACEHOLDER` / `isBareExecutableName` / `argTemplateProblem` / `parseArgs`（client 副本） | [client/validation.ts](../src/client/validation.ts) | 与 host 同规则的 `path` 值域与启动参数模板校验，仅用于保存前预校验（改 host 规则时要同步） |
+| `deriveName` / `effectiveName` / `displayName` / `entryProblem` / `toDraft` | [client/validation.ts](../src/client/validation.ts) | 名称推导、客户端预校验、状态转草稿（`toDraft` 对旧 host 缺字段兜底空串） |
+| `ShellPolicyCard` | [client/card.ts](../src/client/card.ts) | 三视图容器组件（列表 ⇄ 单条目配置界面两级） |
+| `editingId` / `rootRef` / `listScroll` / `listHeight`（state/ref） | [client/card.ts](../src/client/card.ts) | 编辑态与滚动锚点状态（配置界面的 min-height 兜底） |
+| `findScroller` / `openEntryConfig` / `backToList` / `useLayoutEffect` | [client/card.ts](../src/client/card.ts) | 视图切换的滚动保持：定位滚动容器、记/还原 scrollTop、对齐卡片顶部 |
+| `load` / `useEffect` / `update` / `setPrimary` / `addEntry` / `removeEntry` | [client/card.ts](../src/client/card.ts) | 拉状态、文档变更订阅、草稿编辑（新增/删除会切换配置界面） |
+| `probe` / `fillDefaultDescription` | [client/card.ts](../src/client/card.ts) | `POST /detect` 填路径、`POST /defaults` 取默认模板 |
+| `save` / `discard` / `entryWarning` / `editingEntry` / `controls` | [client/card.ts](../src/client/card.ts) | 提交/放弃、行内问题提示、控件组装 |
+| `EntryRow` | [client/entry-row.ts](../src/client/entry-row.ts) | 折叠态条目行（展示组件） |
+| `EntryDetail` | [client/entry-detail.ts](../src/client/entry-detail.ts) | 单条目配置界面（展示组件） |
 
 ### 其它
 
@@ -644,7 +677,7 @@ DSH_CHECKOUT=E:/DSHSource/current npm run typecheck
 | --- | --- | --- |
 | §2.1 目录结构 | 是否存在"工作区根 / 仓库根"两层嵌套 | **不成立**。工作区根即 git 仓库根（`E:\DSHProjects\dsh-windows-shell-policy`，`origin/main`）；已改写叙述与目录树，并补入仓库根的项目上下文文档、`docs/ARCHITECTURE.md` 自身 |
 | 全文相对链接（209 个） | 链接目标能否从文档所在目录解析 | 原文 199 处带 `dsh-windows-shell-policy/` 前缀，全部失效；已改为 `../` 相对仓库根，**114 个相对链接现全部可解析** |
-| `[#Lxx]` 形式的链接标签（49 处） | 标签是否有意义 | 原文标签只有 `#L37` 这类行号，已全部改为文件名标签（如 `[src/index.ts](../src/index.ts#L37)`） |
+| `[#Lxx]` 形式的链接标签（49 处） | 标签是否有意义 | 原文标签只有 `#L37` 这类行号，已全部改为文件名标签（如 `[src/index.ts](../src/index.ts)`） |
 | `src/index.ts` / `src/client/index.ts` 的 `#L` 锚点 | 行号是否仍指向同一符号 | 抽查与逐条核对后**修正 4 处失配**：`bashCandidates` 356→357、`pwshCandidates` 372→373、`disposeAll` 清理处 1153-1155→572-574、`entryRow` 808→809；其余锚点与符号一致，保持不动 |
 | §4.1 类型扩展两条 | 引用的行区间是否仍存在 | `JobKindMap.bash` 的 `#L31-L35` 仍准确；`AppContext` 原写 `#L524-L532` 已失效，改为文件链接（该类型现为 `src/index.ts#L524` 起） |
 | L230 的 `defineTool` 链接 | 链接语法是否闭合 | 原文用全角 `）` 收尾，导致该链接整体失效；已改为普通代码引用 |
@@ -658,3 +691,33 @@ DSH_CHECKOUT=E:/DSHSource/current npm run typecheck
 - `src/` 源码、构建配置、`lib/` 产物：本次为纯文档任务，未改动。
 - §3–§7、§9.2、§10 的功能性描述：只做了链接路径修正，**未复核其内容是否仍与 v0.1.1 代码一致**（例如 §4.7 API 表的行号区间、§10.1 配方里的符号名）。—— 其中 §6、§7.3、§9.2、§10 已在同日的「开发经验复核」中补做（见文档头注）。
 - 未执行构建、类型检查或测试：本轮为文档更正，按 [RUNBOOK.md](../RUNBOOK.md) 的状态标注，这些验证**尚未执行**。
+
+
+---
+
+## 13. 模块拆分记录（2026-10-09）
+
+> 触发原因：`src/index.ts`（1155 行）与 `src/client/index.ts`（1098 行）单文件过长，不利于后续开发与维护。本次**只做结构拆分，行为不变**：host 拆到 `src/host/`、client 拆到 `src/client/`；公开契约（`name` / `inject` / `Config` / `ShellEntry` / `defaultToolDescription` / `apply`）与运行时行为均未改变。
+
+### 13.1 结果
+
+- **host**：`src/index.ts` 退化为 38 行 facade；实现拆为 `src/host/` 下 9 个模块（见 §2.1 目录树与 §4 模块表）。`package.json` 的 `main` / `exports` / `tsdown` 入口均未改，`lib/index.js` 仍是唯一入口。
+- **client**：拆为 `src/client/` 下 8 个模块；`ShellPolicyCard` 容器与 `EntryRow` / `EntryDetail` 两个展示组件分离。client 仍由 tsdown 打成单文件 `lib/client.js`。
+- **`lib/`**：按 [DECISIONS.md](../DECISIONS.md) D12 重新生成并入库；host 产物新增 `lib/host/*.js` 与 `lib/types/host/*.d.ts`。
+- **文档**：全文 `#L行号` 锚点改为所属模块的文件链接；§2.1、§4、§5、§11 与 [MAP.md](../MAP.md)、[PROJECT_INDEX.md](../PROJECT_INDEX.md)、[AGENTS.md](../AGENTS.md)、[NOW.md](../NOW.md) 同步。
+
+### 13.2 验证（本次实际执行）
+
+| 检查 | 命令 | 结果 |
+| --- | --- | --- |
+| host 类型基线 + 产物 | `tsc -p tsconfig.json`（及 `bash scripts/build.sh`） | **通过**（无诊断） |
+| client 打包 | tsdown（及 `bash scripts/build.sh`） | **通过**，产出 `lib/client.js` |
+| host 集成测试 | `node tests/host-harness.mjs`（完全权限，真实 spawn） | **61/61 通过** |
+| 可执行文件/参数回归 | `node tests/executable-and-args.mjs` | **33/33 通过** |
+| client 类型检查（仓库既有流程之外） | 临时 `tsc --noEmit`（`paths` 指向 checkout 的 React 类型） | 与拆分前**同样的 9 条既有诊断**（`Record<string,string>` 收到 `number` ×6、`SlotsService` 未导出 ×1、`ClientContext` 缺 `effect` ×2）——**拆分未引入新诊断** |
+
+### 13.3 说明
+
+- §12 记录的是同日更早的链接 / 目录更正，其中提到的 `src/index.ts#L…` 属于**拆分前**的修订；拆分后行号锚点已不存在。
+- client 侧那 9 条既有诊断与仓库「无 client 类型检查 / 无 lint」的现状一致（[RISKS.md](../RISKS.md) R8）；`src/client` 被 `tsconfig.json` 的 `exclude` 排除，本仓库既有的类型基线并不覆盖 client，是否补一条 client 类型基线另行决定。
+- 本次未改变任何运行时行为；未新增测试（沿用既有两个测试套件作为回归依据）。

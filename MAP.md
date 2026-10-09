@@ -7,11 +7,13 @@
 
 ```
 E:\DSHProjects\dsh-windows-shell-policy\     ← 工作区根 = git 仓库根（origin/main）
-├── src/index.ts              host：条目模型 + 探测 + 策略 + 多 shell 工具 + HTTP API（≈1086 行）
-├── src/client/index.ts       client：设置面板（折叠条目列表 + 单条目配置界面，≈1014 行）
+├── src/index.ts              host 入口（facade）：name/inject + 重导出（38 行）
+├── src/host/                 host 实现，9 个模块：config / shell-args / detect / result / tool / policy / api / context / apply
+├── src/client/               client 实现，8 个模块：index / card / entry-row / entry-detail / validation / styles / icons / types
 ├── lib/                      构建产物，**刻意入库**（Release ZIP / link: 安装直接使用）
-│   ├── index.js  index.js.map  types/index.d.ts     host 产物
-│   └── client.js  client.js.map                     client 产物
+│   ├── index.js  index.js.map  types/index.d.ts      host 入口产物 / 公开类型
+│   ├── host/*.js  *.js.map  types/host/*.d.ts        host 各模块产物
+│   └── client.js  client.js.map                      client 产物（单文件包）
 ├── tests/host-harness.mjs            假 ctx 集成测试（真实 spawn；受限沙箱下 EPERM）
 ├── tests/executable-and-args.mjs     记录型 spawn 桩回归（沙箱内可跑）
 ├── scripts/build.sh          一键构建（探测 checkout → link 依赖 → tsc → tsdown）

@@ -2,6 +2,12 @@
 
 本项目的所有重要变更记录于此。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [未发布]
+
+### 变更
+
+- **源码按职责拆分为多模块（纯结构重构，行为不变）**：`src/index.ts`（1155 行）退化为 38 行 facade（只保留 `name` / `inject` 与重导出），实现拆到 `src/host/` 下 9 个模块（config / shell-args / detect / result / tool / policy / api / context / apply）；`src/client/index.ts`（1098 行）拆为 `src/client/` 下 8 个模块（types / styles / icons / validation / entry-row / entry-detail / card / index），`ShellPolicyCard` 容器与 `EntryRow` / `EntryDetail` 展示组件分离。公开契约（`name` / `inject` / `Config` / `ShellEntry` / `defaultToolDescription` / `apply`）与 `package.json` 的 `main` / `exports` 未变；`lib/` 按约定重新生成并入库（host 新增 `lib/host/*.js` 与 `lib/types/host/*.d.ts`）。验证：`tsc` 通过、tsdown 通过、`tests/host-harness.mjs` 61/61 与 `tests/executable-and-args.mjs` 33/33 通过；结构与验证记录见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
+
 ## [0.1.1] - 2026-10-05
 
 ### 变更

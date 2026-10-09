@@ -17,8 +17,8 @@
 | 建立/恢复开发环境、构建、类型检查、跑测试 | [RUNBOOK.md](RUNBOOK.md) |
 | 搞清目录、版本、profile/部署位置 | [MAP.md](MAP.md) |
 | 理解代码结构与符号在哪里 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（§4 host、§5 client、§11 符号索引） |
-| 改 host 条目模型 / 探测 / 启动参数 / HTTP API | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §4 与 §10.1，再读 [src/index.ts](src/index.ts) |
-| 改设置面板 UI | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §5.2–5.3，再读 [src/client/index.ts](src/client/index.ts) |
+| 改 host 条目模型 / 探测 / 启动参数 / HTTP API | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §4 与 §10.1，再读 [src/host/](src/host/)（config / detect / shell-args / api） |
+| 改设置面板 UI | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §5.2–5.3，再读 [src/client/](src/client/)（card / entry-row / entry-detail / styles） |
 | 新增条目字段（贯穿 host+client） | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §10.1"新增一个条目字段"配方 |
 | 改提示词裁剪 / 引导文本 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §4.9、[docs/capabilities-host.md](docs/capabilities-host.md) |
 | 查 DSH host 服务与事件 | [docs/capabilities-host.md](docs/capabilities-host.md) |
@@ -36,7 +36,7 @@
 | --- | --- |
 | 包名 / 版本 | `dsh-windows-shell-policy` / `0.1.1`（[package.json](package.json)） |
 | 入口 | host `lib/index.js`、client `lib/client.js`、bundle patch `cordis.patch.yml` |
-| 源码规模 | `src/index.ts` ≈1086 行、`src/client/index.ts` ≈1014 行 |
+| 源码规模 | host：facade `src/index.ts` 38 行 + `src/host/*.ts` 9 个模块（最大 `tool.ts` 302 行）；client：`src/client/*.ts` 8 个模块（最大 `styles.ts` 400 行）。符号 → 模块见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §11 |
 | 平台 | 仅 Windows 生效；bundle 的 client `platform: web` |
 | 权威文档入口 | 本文件 + [AGENTS.md](AGENTS.md) |
 

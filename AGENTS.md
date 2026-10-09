@@ -22,7 +22,7 @@
 
 本仓库的具体落点：
 - 主入口路由用 [PROJECT_INDEX.md](PROJECT_INDEX.md)（它只给"任务 → 文件/章节"，不含正文）。
-- 本仓库代码量小（`src/index.ts` 约 1086 行、`src/client/index.ts` 约 1014 行），改动前读**整份源文件**是允许且有价值的（属于"明确需要整份审查"）；但不要因此连带读取 `lib/`（构建产物）、`docs/screenshots/`（图片）。
+- 源码已按职责拆分（2026-10-09）：host 入口 `src/index.ts`（38 行 facade → `src/host/*.ts` 9 个模块，最大 302 行），client `src/client/*.ts` 8 个模块（最大 400 行）。改动前读**该职责对应的模块**（符号 → 模块见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §11）；需要完整理解时整份读取相关模块即可，不必全库通读；不要连带读取 `lib/`（构建产物）、`docs/screenshots/`（图片）。
 - `node_modules/`、`lib/*.map`、`.git/` 默认不读；`CHANGELOG.md` 只读相关版本段，不从头读到尾。
 - 本仓库**当前没有** `PROJECT_NOTES.md` 之类的杂记文件；将来若出现，保留其有效内容并只补充专题入口、按需检索，**不要**再为它新建职责重复的文件。
 

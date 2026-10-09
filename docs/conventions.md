@@ -20,6 +20,7 @@
 ## 构建
 
 - `scripts/build.sh` 探测 `DSH_CHECKOUT`（env → 常见路径），junction link 编译依赖（cordis/schemastery/dsh-tools/dsh-subprocess/dsh-settings 等）后 tsc 编译 host
+- **源码分模块（2026-10-09）**：host 入口 `src/index.ts`（facade）→ `src/host/*.ts`，tsc 逐模块输出 `lib/host/*.js` 与 `lib/types/host/*.d.ts`；ESM/NodeNext 下模块间相对 import 必须写 `.js` 后缀（写 `.ts` 会 `TS2835` / 运行期解析失败）。client 源码在 `src/client/*.ts`，由 tsdown 打包成单文件 `lib/client.js`。
 - client 用 tsdown 编译为 `lib/client.js`（`window.__ModuleLoader__.load` 注册）；tsdown 从 checkout 的 `node_modules/tsdown/dist/run.mjs` 直接跑（`.bin/tsdown` shell shim 在 git-bash 下有 MSYS 路径转换问题）
 - tsconfig 必须 `exclude: ["src/client"]`——host tsc 编译 client 会因 react 等浏览器依赖报 TS2307
 - **发布前手动构建 + `npm publish --ignore-scripts`**：`prepublishOnly` 里的 `bash scripts/build.sh` 在 cmd.exe 环境下因 bash 不在 PATH 而失败（已在 package.json 移除该钩子）

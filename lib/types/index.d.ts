@@ -1,7 +1,20 @@
 /**
- * dsh-windows-shell-policy — Windows shell policy bundle plugin（host 侧）。
+ * dsh-windows-shell-policy — Windows shell policy bundle plugin（host 侧入口）。
  *
- * 职责：
+ * 本文件是 host 的**公开入口（facade）**：只声明插件身份并重导出对外契约；
+ * 实现按职责拆在 src/host/ 下，各自一个模块：
+ *
+ * - host/config.ts       条目模型、Config schema、归一化 / 保存校验、volatile 读取、旧配置迁移
+ * - host/shell-args.ts   shell 家族判定、启动参数模板解析、argv 构造、默认工具提示词
+ * - host/detect.ts       可执行文件解析（绝对路径 / PATH 文件名 / 家族自动探测）
+ * - host/result.ts       shell 工具结果渲染与 exit / signal 状态解析
+ * - host/tool.ts         单条目的 shell 工具定义（defineTool，含执行全链路）
+ * - host/policy.ts       策略状态机：按配置注册 / 注销工具、状态视图、引导文本
+ * - host/api.ts          面板读写用的 HTTP API（/dsh-shell-policy/api/*）
+ * - host/context.ts      DSH 服务面类型声明、loader 反查 entry id、jobs kind 增强
+ * - host/apply.ts        插件装配（apply）
+ *
+ * 对外行为不变，职责摘要：
  * 1. 维护一组可增删的「shell 条目」（显示名 / 启用开关 / 工具名 / 可执行文件路径 / 工具提示词 /
  *    沙箱完全权限 / 默认项）。条目经 /dsh-shell-policy/api 由 client 配置页读写，
  *    并持久化在本插件的 profile entry config（settings.mutate）。
@@ -15,120 +28,9 @@
  * 6. 旧配置 preferred/bashPath 在 shells 为空时映射为等价条目（首次保存时落盘）。
  * 7. 非 Windows 平台只保留状态 API，不注册工具、不裁剪提示词。
  */
-import type { Context, Volatile } from '@deepseek-ai/cordis';
-import z from '@deepseek-ai/schemastery';
-declare module '@deepseek-ai/dsh-jobs' {
-    interface JobKindMap {
-        bash: 'bash';
-    }
-}
+export { apply } from './host/apply.js';
+export { Config } from './host/config.js';
+export type { ShellEntry } from './host/config.js';
+export { defaultToolDescription } from './host/shell-args.js';
 export declare const name = "dsh-windows-shell-policy";
 export declare const inject: string[];
-/** 一个 shell 条目（配置模型）。 */
-export interface ShellEntry {
-    /** 面板用于标识条目的稳定 id（跨保存保持不变）。 */
-    id: string;
-    /** 工具名（模型看到的 shell 工具名）；同一组合内必须唯一。 */
-    name: string;
-    /**
-     * 显示名：只用于配置面板里区分条目（例如同为 `bash` 工具名的 git-bash 与 cygwin），
-     * 不参与工具名、工具提示词或执行。留空时面板回落到工具名 / 可执行文件名。
-     */
-    label: string;
-    /** 是否注册为该 shell 工具。 */
-    enabled: boolean;
-    /**
-     * 可执行文件：**绝对路径**（如 `C:\\Program Files\\Git\\bin\\bash.exe`）**或纯文件名**
-     * （如 `bash.exe`，此时在进程 PATH 里查找）；留空则按家族自动探测。
-     */
-    path: string;
-    /**
-     * 启动参数模板：可执行文件之后的**全部**参数，用 `{command}` 占位实际命令。
-     * 留空用家族默认（bash `-c {command}`、PowerShell `-NoLogo -NoProfile -NonInteractive -Command {command}`）；
-     * 想换掉取命令的开关（如 `-c`）就改这里，例如 `-l -c {command}`、`-Command {command}`、
-     * 甚至只写 `{command}`。空白分隔，支持双引号分组。
-     */
-    args: string;
-    /** 工具提示词（模型看到的工具说明）；留空使用默认模板。 */
-    description: string;
-    /** 是否跳过文件沙箱（等同 danger-full-access，不再触发沙箱审批）。 */
-    fullAccess: boolean;
-    /** 多个 shell 启用时，引导提示词里优先推荐的 shell（至多一个）。 */
-    primary: boolean;
-}
-export interface Config {
-    /**
-     * shell 条目列表（可增删）。live 字段必须是 volatile 引用（settings 从 Config
-     * schema 投影表单），读取时用 unwrapVolatile 解包。
-     */
-    shells: Volatile<ShellEntry[]>;
-    /** @deprecated 旧版单 shell 首选（auto/bash/pwsh）；仅在 shells 为空时用于迁移。 */
-    preferred: Volatile<'auto' | 'bash' | 'pwsh'>;
-    /** @deprecated 旧版显式 bash 路径；仅在 shells 为空时用于迁移。 */
-    bashPath: Volatile<string>;
-}
-export declare const Config: z<Schemastery.ObjectS<NoInfer<{
-    shells: z<NoInfer<({
-        id?: string | null | undefined;
-        name?: string | null | undefined;
-        label?: string | null | undefined;
-        enabled?: boolean | null | undefined;
-        path?: string | null | undefined;
-        args?: string | null | undefined;
-        description?: string | null | undefined;
-        fullAccess?: boolean | null | undefined;
-        primary?: boolean | null | undefined;
-    } & import("@deepseek-ai/cosmokit").Dict)[]>, NoInfer<Schemastery.ObjectT<NoInfer<{
-        id: z<string, string, "defined">;
-        name: z<string, string, "defined">;
-        label: z<string, string, "defined">;
-        enabled: z<boolean, boolean, "defined">;
-        path: z<string, string, "defined">;
-        args: z<string, string, "defined">;
-        description: z<string, string, "defined">;
-        fullAccess: z<boolean, boolean, "defined">;
-        primary: z<boolean, boolean, "defined">;
-    }>>[]>, "volatile-defined">;
-    preferred: z<"bash" | "pwsh" | "auto", "bash" | "pwsh" | "auto", "volatile-defined">;
-    bashPath: z<string, string, "volatile-defined">;
-}>>, Schemastery.ObjectT<NoInfer<{
-    shells: z<NoInfer<({
-        id?: string | null | undefined;
-        name?: string | null | undefined;
-        label?: string | null | undefined;
-        enabled?: boolean | null | undefined;
-        path?: string | null | undefined;
-        args?: string | null | undefined;
-        description?: string | null | undefined;
-        fullAccess?: boolean | null | undefined;
-        primary?: boolean | null | undefined;
-    } & import("@deepseek-ai/cosmokit").Dict)[]>, NoInfer<Schemastery.ObjectT<NoInfer<{
-        id: z<string, string, "defined">;
-        name: z<string, string, "defined">;
-        label: z<string, string, "defined">;
-        enabled: z<boolean, boolean, "defined">;
-        path: z<string, string, "defined">;
-        args: z<string, string, "defined">;
-        description: z<string, string, "defined">;
-        fullAccess: z<boolean, boolean, "defined">;
-        primary: z<boolean, boolean, "defined">;
-    }>>[]>, "volatile-defined">;
-    preferred: z<"bash" | "pwsh" | "auto", "bash" | "pwsh" | "auto", "volatile-defined">;
-    bashPath: z<string, string, "volatile-defined">;
-}>>, "plain">;
-export declare function defaultToolDescription(entry: Pick<ShellEntry, 'name' | 'path' | 'args'>, executable: string): string;
-/** 本插件消费的 host 服务面（webServer 类型由本包声明）。 */
-type AppContext = Context & {
-    webServer: {
-        register(spec: {
-            kind: 'prefix';
-            path: string;
-            handler: (req: any, res: {
-                writeHead(code: number, headers: Record<string, string>): void;
-                end(body: string): void;
-            }) => void | Promise<void>;
-        }): () => void;
-    };
-};
-export declare function apply(ctx: AppContext, config: Config): void;
-export {};
